@@ -32,7 +32,5 @@ This project simulates a **ground-station → satellite → web-visualization pi
 - High-rate IMU streaming (10–20 Hz)
 - Stateless browser clients (auto-recover)
 
----
 
-## 🧠 System Architecture
 
