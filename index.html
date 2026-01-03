@@ -1,3 +1,4 @@
+```html
 <!doctype html>
 <html lang="en">
 <head>
@@ -105,6 +106,12 @@
       <button id="btn2d">2D POV</button>
     </div>
 
+    <!-- ✅ 2D options (shown only when in 2D) -->
+    <div class="row" id="row2dOpts" style="display:none;">
+      <button id="btn2dFollow">2D: Trace Sat</button>
+      <button id="btn2dZoom" class="active">2D: Zoom Out</button>
+    </div>
+
     <div class="kv"><div class="k">Status</div><div class="v" id="st">Booting…</div></div>
     <div class="kv"><div class="k">UTC</div><div class="v" id="utc">—</div></div>
 
@@ -159,6 +166,11 @@
   // Keep as +1 for default.
   const IMU_SIGN = { roll: +1, pitch: +1, yaw: +1 };
 
+  // ✅ 2D behavior controls
+  let follow2D = false;              // default: zoom out
+  const FOLLOW2D_HEIGHT_M = 1.8e6;   // closer when tracing
+  const ZOOM2D_HEIGHT_M   = 2.4e7;   // wider map view when zoomed out
+
   /* ===================== DOM ===================== */
   const el = (id) => document.getElementById(id);
   const stEl = el("st"), utcEl = el("utc"), latEl = el("lat"), lonEl = el("lon"),
@@ -166,6 +178,10 @@
         tleAgeEl = el("tleAge"), tleBox = el("tleBox");
 
   const btnSat = el("btnSat"), btnWorld = el("btnWorld"), btn2d = el("btn2d");
+  const row2dOpts = el("row2dOpts");
+  const btn2dFollow = el("btn2dFollow");
+  const btn2dZoom   = el("btn2dZoom");
+
   const hud = el("hud");
   const miniDiv = el("miniSatView");
 
@@ -173,6 +189,12 @@
     [btnSat, btnWorld, btn2d].forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
   }
+
+  function set2dActive(btn){
+    [btn2dFollow, btn2dZoom].forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+  }
+
   function setStatus(s){ stEl.textContent = s; }
   function nowUTCString(){ return new Date().toISOString().replace("T"," ").replace("Z"," UTC"); }
 
@@ -378,11 +400,7 @@
   }
 
   /* ===================== ORIENTATION (IMU -> CESIUM) ===================== */
-  // We compute a quaternion at the satellite position using ENU frame.
-  // Map IMU yaw->heading, pitch->pitch, roll->roll (in radians).
-  // If axes feel off, flip IMU_SIGN values above.
   const imuOrientation = new Cesium.CallbackProperty((time) => {
-    // Need current position in ECEF
     const pos = sampledPos.getValue(time, new Cesium.Cartesian3());
     if (!pos) return Cesium.Quaternion.IDENTITY;
 
@@ -398,7 +416,6 @@
   satEntity = viewer.entities.add({
     name: "CubeSat",
     position: sampledPos,
-    // ✅ use IMU orientation (instead of VelocityOrientationProperty)
     orientation: imuOrientation,
     model: {
       uri: MODEL_URI,
@@ -432,7 +449,6 @@
   /* ===================== MINI SAT ENTITY ===================== */
   miniSatEntity = miniViewer.entities.add({
     position: sampledPos,
-    // ✅ same IMU orientation in mini view too
     orientation: imuOrientation,
     model: {
       uri: MODEL_URI,
@@ -489,6 +505,13 @@
     const targetR = coverageRadiusMeters(s.altKm * 1000, MIN_ELEV_DEG);
     covRadiusSmoothM += (targetR - covRadiusSmoothM) * COVER_SMOOTH;
 
+    // ✅ Continuous follow in 2D (prevents "freeze/drift away")
+    if (viewer.scene.mode === Cesium.SceneMode.SCENE2D && follow2D) {
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, FOLLOW2D_HEIGHT_M)
+      });
+    }
+
     viewer.scene.requestRender();
     miniViewer.scene.requestRender();
     layoutMini();
@@ -509,8 +532,16 @@
     });
   }
 
+  function fly2DZoomOut(){
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(INDIA_HOME.lon, INDIA_HOME.lat, ZOOM2D_HEIGHT_M),
+      duration: 0.9
+    });
+  }
+
   function setSatPOV(){
     setActive(btnSat);
+    row2dOpts.style.display = "none";
     viewer.scene.morphTo3D(0.6);
     viewer.trackedEntity = satEntity;
     showMiniView(false);
@@ -520,6 +551,7 @@
 
   function setWorldPOV(){
     setActive(btnWorld);
+    row2dOpts.style.display = "none";
     viewer.scene.morphTo3D(0.6);
     viewer.trackedEntity = undefined;
     showMiniView(true);
@@ -531,10 +563,38 @@
     setActive(btn2d);
     viewer.trackedEntity = undefined;
     viewer.scene.morphTo2D(0.8);
-    showMiniView(true);
-    setTimeout(() => viewer.flyTo(satEntity, { duration: 1.0 }), 250);
-    setStatus("2D POV ✅");
+    row2dOpts.style.display = "flex";
+
+    if (follow2D) {
+      set2dActive(btn2dFollow);
+      showMiniView(false);             // ✅ mini OFF while tracing
+      setStatus("2D Trace ✅");
+    } else {
+      set2dActive(btn2dZoom);
+      showMiniView(true);              // ✅ mini ON only in zoom-out
+      setStatus("2D Zoom Out ✅");
+      setTimeout(fly2DZoomOut, 350);
+    }
+
+    viewer.scene.requestRender();
   }
+
+  // ✅ 2D option buttons
+  btn2dFollow.onclick = () => {
+    follow2D = true;
+    set2dActive(btn2dFollow);
+    showMiniView(false);
+    setStatus("2D Trace ✅");
+    viewer.scene.requestRender();
+  };
+
+  btn2dZoom.onclick = () => {
+    follow2D = false;
+    set2dActive(btn2dZoom);
+    showMiniView(true);
+    setStatus("2D Zoom Out ✅");
+    fly2DZoomOut();
+  };
 
   btnSat.onclick = setSatPOV;
   btnWorld.onclick = setWorldPOV;
@@ -595,7 +655,6 @@
     if (topic === TOPIC_IMU) {
       try {
         const data = JSON.parse(msg);
-        // accept roll/pitch/yaw (case-insensitive-ish)
         const r = Number(data.roll  ?? data.Roll  ?? data.roll_deg  ?? data.rollDeg);
         const p = Number(data.pitch ?? data.Pitch ?? data.pitch_deg ?? data.pitchDeg);
         const y = Number(data.yaw   ?? data.Yaw   ?? data.yaw_deg   ?? data.yawDeg);
@@ -604,11 +663,10 @@
         if (!Number.isNaN(p)) imu.pitch = p;
         if (!Number.isNaN(y)) imu.yaw = y;
 
-        // ask render so orientation updates immediately (since requestRenderMode=true)
         viewer.scene.requestRender();
         miniViewer.scene.requestRender();
       } catch (e) {
-        // ignore bad packets, don't kill app
+        // ignore bad packets
       }
     }
   });
@@ -621,3 +679,4 @@
 </script>
 </body>
 </html>
+
