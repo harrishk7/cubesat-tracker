@@ -45,7 +45,7 @@
     #miniSatView{
       position:absolute;
       left:12px;
-      top: 320px; /* will be auto-adjusted via JS to sit below HUD */
+      top: 320px; /* auto-adjusted via JS to sit below HUD */
       width:360px;
       height:220px;
       border-radius:14px;
@@ -106,7 +106,7 @@
       <button id="btn2d">2D POV</button>
     </div>
 
-    <!-- ✅ 2D options (shown only when in 2D) -->
+    <!-- 2D options (shown only when in 2D) -->
     <div class="row" id="row2dOpts" style="display:none;">
       <button id="btn2dFollow">2D: Trace Sat</button>
       <button id="btn2dZoom" class="active">2D: Zoom Out</button>
@@ -134,39 +134,39 @@
 (async function () {
 
   /* ===================== CONFIG ===================== */
-  const MODEL_URI = "/assets/CubeSat.glb";
+  // TIP: When serving locally with python http.server, prefer "./assets/..." not "/assets/..."
+  const MODEL_URI = "./assets/CubeSat.glb";
 
   const MQTT_URLS   = ["wss://broker.hivemq.com:8884/mqtt"];
   const TOPIC_TLE   = "cubesat/tle";
-  const TOPIC_IMU   = "cubesat/attitude";   // ✅ roll/pitch/yaw JSON comes here
+  const TOPIC_IMU   = "cubesat/attitude";   // roll/pitch/yaw JSON
 
   const INDIA_HOME = { lon: 78.9629, lat: 20.5937, height: 8.0e6 };
   const WORLD_ALT  = 3.2e7;
 
-  // ✅ ~1 orbit of LEO in view (good looking trail)
-  const SAMPLE_PAST_SEC   = 45 * 60;
-  const SAMPLE_FUTURE_SEC = 45 * 60;
+  // ✅ Longer + smoother orbit trail
+  const SAMPLE_PAST_SEC   = 70 * 60;
+  const SAMPLE_FUTURE_SEC = 70 * 60;
 
-  // ✅ optional perf tweak
-  const SAMPLE_STEP_SEC   = 3;
+  // ✅ Denser sampling = smooth trail
+  const SAMPLE_STEP_SEC   = 1;
 
   // keep appending a little ahead
-  const APPEND_AHEAD_SEC  = 45;
-  const APPEND_EVERY_MS   = 900;
+  const APPEND_AHEAD_SEC  = 90;
+  const APPEND_EVERY_MS   = 800;
 
   // coverage smoothing (EMA)
   const MIN_ELEV_DEG = 10;
   const COVER_ALPHA  = 0.22;
   const COVER_SMOOTH = 0.15;
 
-  // ✅ IMU state (degrees). We only use this to rotate the model.
+  // IMU state (degrees)
   const imu = { roll: 0, pitch: 0, yaw: 0 };
 
-  // ✅ If your IMU axes feel reversed, tweak these signs.
-  // Keep as +1 for default.
+  // Flip signs if needed
   const IMU_SIGN = { roll: +1, pitch: +1, yaw: +1 };
 
-  // ✅ 2D behavior controls
+  // 2D behavior controls
   let follow2D = false;              // default: zoom out
   const FOLLOW2D_HEIGHT_M = 1.8e6;   // closer when tracing
   const ZOOM2D_HEIGHT_M   = 2.4e7;   // wider map view when zoomed out
@@ -310,7 +310,7 @@
     return Math.max(0, R * psi);
   }
 
-  /* ===================== SAMPLE POSITION (COMPAT FIX) ===================== */
+  /* ===================== SAMPLED POSITION ===================== */
   let sampledPos = new Cesium.SampledPositionProperty();
   sampledPos.setInterpolationOptions({
     interpolationDegree: 5,
@@ -319,11 +319,10 @@
 
   let lastSampledTo = null;
 
-  // forward refs
+  // entity refs
   let satEntity = null;
   let miniSatEntity = null;
 
-  // ✅ Always use Cesium clock time
   function nowDateFromClock(){
     return Cesium.JulianDate.toDate(viewer.clock.currentTime);
   }
@@ -384,7 +383,8 @@
   function appendSamplesAhead(){
     if (!satrec || !lastSampledTo) return;
 
-    const now = Cesium.JulianDate.now();
+    // ✅ IMPORTANT: use viewer clock time (not wall clock) to avoid gaps
+    const now = viewer.clock.currentTime;
     const target = Cesium.JulianDate.addSeconds(now, APPEND_AHEAD_SEC, new Cesium.JulianDate());
 
     while (Cesium.JulianDate.lessThan(lastSampledTo, target)) {
@@ -438,7 +438,8 @@
       leadTime: SAMPLE_FUTURE_SEC,
       trailTime: SAMPLE_PAST_SEC,
       width: 2,
-      resolution: 15,
+      // ✅ Lower = smoother. This samples the position property along the path.
+      resolution: 1,
       material: new Cesium.PolylineGlowMaterialProperty({
         glowPower: 0.18,
         color: Cesium.Color.CYAN.withAlpha(0.9)
@@ -505,7 +506,7 @@
     const targetR = coverageRadiusMeters(s.altKm * 1000, MIN_ELEV_DEG);
     covRadiusSmoothM += (targetR - covRadiusSmoothM) * COVER_SMOOTH;
 
-    // ✅ Continuous follow in 2D (prevents "freeze/drift away")
+    // Continuous follow in 2D
     if (viewer.scene.mode === Cesium.SceneMode.SCENE2D && follow2D) {
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, FOLLOW2D_HEIGHT_M)
@@ -567,11 +568,11 @@
 
     if (follow2D) {
       set2dActive(btn2dFollow);
-      showMiniView(false);             // ✅ mini OFF while tracing
+      showMiniView(false); // mini OFF while tracing
       setStatus("2D Trace ✅");
     } else {
       set2dActive(btn2dZoom);
-      showMiniView(true);              // ✅ mini ON only in zoom-out
+      showMiniView(true); // mini ON only in zoom-out
       setStatus("2D Zoom Out ✅");
       setTimeout(fly2DZoomOut, 350);
     }
@@ -579,7 +580,7 @@
     viewer.scene.requestRender();
   }
 
-  // ✅ 2D option buttons
+  // 2D option buttons
   btn2dFollow.onclick = () => {
     follow2D = true;
     set2dActive(btn2dFollow);
@@ -634,7 +635,6 @@
     mqEl.textContent = "Connected ✅";
     setStatus("MQTT connected ✅");
 
-    // ✅ Subscribe to BOTH topics
     mqttClient.subscribe([TOPIC_TLE, TOPIC_IMU], (err) => {
       setStatus(err ? "Subscribe error ❌" : ("Subscribed ✅ " + TOPIC_TLE + " + " + TOPIC_IMU));
     });
@@ -651,7 +651,7 @@
       return;
     }
 
-    // ✅ IMU attitude (roll/pitch/yaw)
+    // IMU attitude (roll/pitch/yaw)
     if (topic === TOPIC_IMU) {
       try {
         const data = JSON.parse(msg);
@@ -665,9 +665,7 @@
 
         viewer.scene.requestRender();
         miniViewer.scene.requestRender();
-      } catch (e) {
-        // ignore bad packets
-      }
+      } catch (e) {}
     }
   });
 
@@ -679,4 +677,3 @@
 </script>
 </body>
 </html>
-
