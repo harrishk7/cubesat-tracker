@@ -1,4 +1,3 @@
-```html
 <!doctype html>
 <html lang="en">
 <head>
@@ -10,7 +9,7 @@
   <link href="https://unpkg.com/cesium/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
   <script src="https://unpkg.com/cesium/Build/Cesium/Cesium.js"></script>
 
-  <!-- SGP4 (TLE) -->
+  <!-- SGP4 -->
   <script src="https://unpkg.com/satellite.js/dist/satellite.min.js"></script>
 
   <!-- MQTT (WebSocket) -->
@@ -24,12 +23,12 @@
       background:#000;
     }
 
-    /* HUD extreme top-left */
+    /* HUD */
     #hud{
       position:absolute;
       left:12px; top:12px;
       z-index:30;
-      width: 360px;
+      width: 380px;
       max-height: calc(100vh - 24px);
       overflow:auto;
       padding:12px;
@@ -41,13 +40,34 @@
       backdrop-filter: blur(8px);
     }
 
-    /* Mini viewer BELOW HUD */
+    /* LIVE pill */
+    #livePill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06);
+      font: 11px system-ui, sans-serif;
+      user-select:none;
+      white-space:nowrap;
+    }
+    #liveDot{
+      width:8px; height:8px;
+      border-radius:999px;
+      background: rgba(180,180,180,0.95);
+      box-shadow: 0 0 14px rgba(180,180,180,0.35);
+    }
+    #liveTxt{ letter-spacing: 0.4px; opacity: 0.92; }
+
+    /* Mini view */
     #miniSatView{
       position:absolute;
       left:12px;
-      top: 320px; /* auto-adjusted via JS to sit below HUD */
-      width:360px;
-      height:220px;
+      top: 320px;
+      width:380px;
+      height:230px;
       border-radius:14px;
       overflow:hidden;
       border:1px solid rgba(0,255,255,0.35);
@@ -57,7 +77,7 @@
       display:none;
     }
 
-    #hud h3 { margin:0 0 10px; font-size:13px; }
+    #hud h3 { margin:0; font-size:13px; }
 
     .row { display:flex; gap:8px; margin-bottom:10px; }
     button{
@@ -90,6 +110,49 @@
       line-height: 1.35;
     }
 
+    /* Modal */
+    #modal{
+      position:absolute;
+      inset:0;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      z-index:100;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+    }
+    #modalCard{
+      width:min(760px, calc(100vw - 24px));
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.78);
+      color:#fff;
+      padding:14px 14px 12px;
+      box-shadow: 0 0 40px rgba(0,0,0,0.6);
+      font: 12px/1.45 system-ui, sans-serif;
+    }
+    #modalTop{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      align-items:center;
+      margin-bottom:8px;
+    }
+    #modalTitle{
+      font-size:13px;
+      margin:0;
+      opacity:0.95;
+    }
+    #modalClose{
+      cursor:pointer;
+      padding:6px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+      color:#fff;
+      font: 12px system-ui, sans-serif;
+    }
+
     .cesium-viewer-bottom { display:none !important; }
   </style>
 </head>
@@ -97,8 +160,24 @@
 <body>
   <div id="cesiumContainer"></div>
 
+  <div id="modal">
+    <div id="modalCard">
+      <div id="modalTop">
+        <h4 id="modalTitle">Ground Station • Pass Planner</h4>
+        <button id="modalClose">Close</button>
+      </div>
+      <pre id="modalBody">Loading…</pre>
+    </div>
+  </div>
+
   <div id="hud">
-    <h3>CubeSat Tracker</h3>
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
+      <h3>CubeSat Tracker</h3>
+      <div id="livePill" title="Streaming status">
+        <span id="liveDot"></span>
+        <span id="liveTxt">BOOT</span>
+      </div>
+    </div>
 
     <div class="row">
       <button id="btnSat" class="active">Sat POV</button>
@@ -106,7 +185,6 @@
       <button id="btn2d">2D POV</button>
     </div>
 
-    <!-- 2D options (shown only when in 2D) -->
     <div class="row" id="row2dOpts" style="display:none;">
       <button id="btn2dFollow">2D: Trace Sat</button>
       <button id="btn2dZoom" class="active">2D: Zoom Out</button>
@@ -132,44 +210,60 @@
 
 <script>
 (async function () {
+  "use strict";
 
   /* ===================== CONFIG ===================== */
-  // TIP: When serving locally with python http.server, prefer "./assets/..." not "/assets/..."
   const MODEL_URI = "./assets/CubeSat.glb";
 
-  const MQTT_URLS   = ["wss://broker.hivemq.com:8884/mqtt"];
-  const TOPIC_TLE   = "cubesat/tle";
-  const TOPIC_IMU   = "cubesat/attitude";   // roll/pitch/yaw JSON
+  /* ===== HiveMQ Cloud (Browser must use WSS) ===== */
+  const MQTT_HOST = "4bde42256ac0461d872447cc72b1a99f.s1.eu.hivemq.cloud";
+  const MQTT_WS_PORT = 8884;
 
+  // ✅ Use the exact URL format HiveMQ Cloud expects.
+  // If your console shows "WebSocket URL", match it exactly.
+  const MQTT_WSS_URL = `wss://${MQTT_HOST}:${MQTT_WS_PORT}/mqtt`;
+
+  const MQTT_USERNAME = "hivemq.webclient.1768060269881";
+  const MQTT_PASSWORD = "#BFa@Eeg<f,h86d9D4CA";
+
+  const TOPIC_TLE = "cubesat/tle";
+  const TOPIC_IMU = "cubesat/attitude";
+
+  /* ===== Camera presets ===== */
   const INDIA_HOME = { lon: 78.9629, lat: 20.5937, height: 8.0e6 };
   const WORLD_ALT  = 3.2e7;
 
-  // ✅ Longer + smoother orbit trail
+  /* ===== Ground Station ===== */
+  const GROUND_STATION = { name: "ground_station", lat: 13.0037, lon: 80.2041, altM: 12 };
+
+  const INDIA_BBOX = { latMin: 6.0, latMax: 37.5, lonMin: 68.0, lonMax: 98.0 };
+
+  // Orbit sampling
   const SAMPLE_PAST_SEC   = 70 * 60;
   const SAMPLE_FUTURE_SEC = 70 * 60;
-
-  // ✅ Denser sampling = smooth trail
   const SAMPLE_STEP_SEC   = 1;
 
-  // keep appending a little ahead
-  const APPEND_AHEAD_SEC  = 90;
-  const APPEND_EVERY_MS   = 800;
+  // Smoother updates
+  const APPEND_AHEAD_SEC  = 180;
+  const APPEND_EVERY_MS   = 250;
 
-  // coverage smoothing (EMA)
+  // Coverage ring
   const MIN_ELEV_DEG = 10;
-  const COVER_ALPHA  = 0.22;
-  const COVER_SMOOTH = 0.15;
+  const COVER_SMOOTH = 0.12;
+  const COVER_POINTS = 96;
+  const COVER_MAX_M  = 6500000;
 
-  // IMU state (degrees)
+  // IMU
   const imu = { roll: 0, pitch: 0, yaw: 0 };
-
-  // Flip signs if needed
   const IMU_SIGN = { roll: +1, pitch: +1, yaw: +1 };
 
-  // 2D behavior controls
-  let follow2D = false;              // default: zoom out
-  const FOLLOW2D_HEIGHT_M = 1.8e6;   // closer when tracing
-  const ZOOM2D_HEIGHT_M   = 2.4e7;   // wider map view when zoomed out
+  // 2D behavior
+  let follow2D = false;
+  const FOLLOW2D_HEIGHT_M = 1.8e6;
+
+  function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+  const DPR = clamp(window.devicePixelRatio || 1, 1, 2);
+  const RES_SCALE = clamp(DPR * 1.35, 1, 2);
 
   /* ===================== DOM ===================== */
   const el = (id) => document.getElementById(id);
@@ -185,11 +279,35 @@
   const hud = el("hud");
   const miniDiv = el("miniSatView");
 
+  const liveDot = el("liveDot");
+  const liveTxt = el("liveTxt");
+
+  const modal = el("modal");
+  const modalBody = el("modalBody");
+  const modalClose = el("modalClose");
+
+  function setLive(mode){
+    liveTxt.textContent = mode;
+    if (mode === "LIVE") {
+      liveDot.style.background = "rgba(0,255,255,0.95)";
+      liveDot.style.boxShadow = "0 0 14px rgba(0,255,255,0.55)";
+    } else if (mode === "RECONNECT") {
+      liveDot.style.background = "rgba(255,210,0,0.95)";
+      liveDot.style.boxShadow = "0 0 14px rgba(255,210,0,0.55)";
+    } else if (mode === "OFFLINE") {
+      liveDot.style.background = "rgba(255,80,80,0.95)";
+      liveDot.style.boxShadow = "0 0 14px rgba(255,80,80,0.55)";
+    } else {
+      liveDot.style.background = "rgba(180,180,180,0.95)";
+      liveDot.style.boxShadow = "0 0 14px rgba(180,180,180,0.35)";
+    }
+  }
+  setLive("BOOT");
+
   function setActive(btn){
     [btnSat, btnWorld, btn2d].forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
   }
-
   function set2dActive(btn){
     [btn2dFollow, btn2dZoom].forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
@@ -202,14 +320,31 @@
     miniDiv.style.display = show ? "block" : "none";
     layoutMini();
   }
-
   function layoutMini(){
     const r = hud.getBoundingClientRect();
     miniDiv.style.top = (Math.round(r.bottom) + 12) + "px";
   }
   window.addEventListener("resize", layoutMini);
 
-  /* ===================== CESIUM MAIN VIEWER ===================== */
+  function openModal(text){
+    modalBody.textContent = text;
+    modal.style.display = "flex";
+  }
+  function closeModal(){
+    modal.style.display = "none";
+  }
+  modalClose.onclick = closeModal;
+  modal.onclick = (e)=>{ if (e.target === modal) closeModal(); };
+
+  /* ===================== HELPERS ===================== */
+  function normLon(lon){
+    let L = lon;
+    while (L > 180) L -= 360;
+    while (L < -180) L += 360;
+    return L;
+  }
+
+  /* ===================== CESIUM VIEWER ===================== */
   const viewer = new Cesium.Viewer("cesiumContainer", {
     animation: false,
     timeline: false,
@@ -221,25 +356,34 @@
     infoBox: false,
     selectionIndicator: false,
     homeButton: true,
-    requestRenderMode: true,
-    maximumRenderTimeChange: 0.25
+    requestRenderMode: false
   });
 
+  viewer.scene.backgroundColor = Cesium.Color.BLACK;
+  viewer.scene.skyBox = undefined;
+  viewer.scene.skyAtmosphere.show = false;
+
+  viewer.resolutionScale = RES_SCALE;
+  viewer.scene.postProcessStages.fxaa.enabled = true;
+  viewer.scene.globe.maximumScreenSpaceError = 1.0;
+  viewer.scene.globe.tileCacheSize = 1200;
   viewer.scene.globe.enableLighting = true;
+  viewer.scene.globe.depthTestAgainstTerrain = true;
+
+  try {
+    if (Cesium.createWorldTerrainAsync) {
+      viewer.terrainProvider = await Cesium.createWorldTerrainAsync();
+    }
+  } catch {}
+
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(INDIA_HOME.lon, INDIA_HOME.lat, INDIA_HOME.height)
   });
 
-  viewer.homeButton.viewModel.command.beforeExecute.addEventListener((e) => {
-    e.cancel = true;
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(INDIA_HOME.lon, INDIA_HOME.lat, INDIA_HOME.height),
-      duration: 1.1
-    });
-  });
-
   viewer.clock.clockRange = Cesium.ClockRange.UNBOUNDED;
   viewer.clock.multiplier = 1;
+  viewer.clock.shouldAnimate = true;
+  viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK_MULTIPLIER;
 
   /* ===================== MINI VIEWER ===================== */
   const miniViewer = new Cesium.Viewer("miniSatView", {
@@ -253,14 +397,73 @@
     infoBox: false,
     selectionIndicator: false,
     homeButton: false,
-    requestRenderMode: true,
-    maximumRenderTimeChange: 0.25
+    requestRenderMode: false
   });
 
   miniViewer.scene.backgroundColor = Cesium.Color.BLACK;
   miniViewer.scene.skyBox = undefined;
-  miniViewer.scene.skyAtmosphere = undefined;
+  miniViewer.scene.skyAtmosphere.show = false;
+
+  miniViewer.resolutionScale = RES_SCALE;
+  miniViewer.scene.postProcessStages.fxaa.enabled = true;
+  miniViewer.scene.globe.maximumScreenSpaceError = 1.0;
+  miniViewer.scene.globe.tileCacheSize = 600;
   miniViewer.scene.globe.enableLighting = true;
+  miniViewer.scene.globe.depthTestAgainstTerrain = true;
+
+  try {
+    if (Cesium.createWorldTerrainAsync) {
+      miniViewer.terrainProvider = await Cesium.createWorldTerrainAsync();
+    }
+  } catch {}
+
+  miniViewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK_MULTIPLIER;
+  miniViewer.clock.multiplier = 1;
+  miniViewer.clock.shouldAnimate = true;
+
+  /* ===================== GROUND STATION (LOCKED IN ALL MODES) ===================== */
+  const gsPos = new Cesium.CallbackProperty(() => {
+    return Cesium.Cartesian3.fromDegrees(GROUND_STATION.lon, GROUND_STATION.lat, 0);
+  }, false);
+
+  const gsHeightRef = new Cesium.CallbackProperty(() => {
+    return (viewer.scene.mode === Cesium.SceneMode.SCENE3D)
+      ? Cesium.HeightReference.CLAMP_TO_GROUND
+      : Cesium.HeightReference.NONE;
+  }, false);
+
+  viewer.entities.add({
+    name: GROUND_STATION.name,
+    position: gsPos,
+    billboard: {
+      image: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <circle cx="32" cy="32" r="10" fill="rgba(0,255,255,0.95)"/>
+          <circle cx="32" cy="32" r="18" fill="none" stroke="rgba(0,255,255,0.55)" stroke-width="3"/>
+          <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(0,255,255,0.22)" stroke-width="3"/>
+        </svg>
+      `),
+      width: 28,
+      height: 28,
+      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      heightReference: gsHeightRef,
+      disableDepthTestDistance: 200000.0
+    },
+    label: {
+      text: GROUND_STATION.name,
+      font: "13px system-ui",
+      fillColor: Cesium.Color.CYAN,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+      heightReference: gsHeightRef,
+      pixelOffset: new Cesium.Cartesian2(0, -34),
+      disableDepthTestDistance: 200000.0
+    }
+  });
 
   /* ===================== ORBIT (SGP4) ===================== */
   let satName = "CubeSat";
@@ -272,7 +475,7 @@
       const j = JSON.parse(msg);
       if (j && j.line1 && j.line2) return { name: j.name || "SAT", l1: j.line1.trim(), l2: j.line2.trim() };
     } catch {}
-    const lines = msg.split("\n").map(s=>s.trim()).filter(Boolean);
+    const lines = String(msg).split("\n").map(s=>s.trim()).filter(Boolean);
     if (lines.length >= 3) return { name: lines[0], l1: lines[1], l2: lines[2] };
     if (lines.length >= 2) return { name: "SAT", l1: lines[0], l2: lines[1] };
     return null;
@@ -280,7 +483,6 @@
 
   function propagateLLA(date) {
     if (!satrec) return null;
-
     const pv = satellite.propagate(satrec, date);
     if (!pv || !pv.position || !pv.velocity) return null;
 
@@ -318,28 +520,19 @@
   });
 
   let lastSampledTo = null;
-
-  // entity refs
   let satEntity = null;
   let miniSatEntity = null;
 
-  function nowDateFromClock(){
-    return Cesium.JulianDate.toDate(viewer.clock.currentTime);
-  }
-
-  function clearSamplesCompat(){
+  function clearSamples(){
     if (sampledPos && typeof sampledPos.removeAllSamples === "function") {
       sampledPos.removeAllSamples();
-      return;
+    } else {
+      sampledPos = new Cesium.SampledPositionProperty();
+      sampledPos.setInterpolationOptions({
+        interpolationDegree: 5,
+        interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
+      });
     }
-
-    const fresh = new Cesium.SampledPositionProperty();
-    fresh.setInterpolationOptions({
-      interpolationDegree: 5,
-      interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
-    });
-    sampledPos = fresh;
-
     if (satEntity) satEntity.position = sampledPos;
     if (miniSatEntity) miniSatEntity.position = sampledPos;
   }
@@ -361,9 +554,8 @@
   }
 
   function clearAndSeedSamples(centerDate){
-    clearSamplesCompat();
+    clearSamples();
     lastSampledTo = null;
-
     syncClocksTo(centerDate);
 
     const center = Cesium.JulianDate.fromDate(centerDate);
@@ -375,15 +567,10 @@
       sampledPos.addSample(jt, llaToCartesian(s.lat, s.lon, s.altKm));
       lastSampledTo = jt;
     }
-
-    viewer.scene.requestRender();
-    miniViewer.scene.requestRender();
   }
 
   function appendSamplesAhead(){
     if (!satrec || !lastSampledTo) return;
-
-    // ✅ IMPORTANT: use viewer clock time (not wall clock) to avoid gaps
     const now = viewer.clock.currentTime;
     const target = Cesium.JulianDate.addSeconds(now, APPEND_AHEAD_SEC, new Cesium.JulianDate());
 
@@ -394,9 +581,6 @@
       if (s) sampledPos.addSample(next, llaToCartesian(s.lat, s.lon, s.altKm));
       lastSampledTo = next;
     }
-
-    viewer.scene.requestRender();
-    miniViewer.scene.requestRender();
   }
 
   /* ===================== ORIENTATION (IMU -> CESIUM) ===================== */
@@ -438,7 +622,6 @@
       leadTime: SAMPLE_FUTURE_SEC,
       trailTime: SAMPLE_PAST_SEC,
       width: 2,
-      // ✅ Lower = smoother. This samples the position property along the path.
       resolution: 1,
       material: new Cesium.PolylineGlowMaterialProperty({
         glowPower: 0.18,
@@ -447,7 +630,6 @@
     }
   });
 
-  /* ===================== MINI SAT ENTITY ===================== */
   miniSatEntity = miniViewer.entities.add({
     position: sampledPos,
     orientation: imuOrientation,
@@ -460,27 +642,226 @@
   });
   miniViewer.trackedEntity = miniSatEntity;
 
-  /* ===================== COVERAGE (NO FLICKER) ===================== */
-  let covLon = 0, covLat = 0;
+  /* ===================== COVERAGE AREA ===================== */
   let covRadiusSmoothM = 0;
 
+  function destinationLatLon(latDeg, lonDeg, bearingDeg, distanceM){
+    const R = 6378137.0;
+    const φ1 = Cesium.Math.toRadians(latDeg);
+    const λ1 = Cesium.Math.toRadians(lonDeg);
+    const θ  = Cesium.Math.toRadians(bearingDeg);
+    const δ  = distanceM / R;
+
+    const sinφ1 = Math.sin(φ1), cosφ1 = Math.cos(φ1);
+    const sinδ  = Math.sin(δ),  cosδ  = Math.cos(δ);
+
+    const sinφ2 = sinφ1*cosδ + cosφ1*sinδ*Math.cos(θ);
+    const φ2 = Math.asin(Math.min(1, Math.max(-1, sinφ2)));
+
+    const y = Math.sin(θ) * sinδ * cosφ1;
+    const x = cosδ - sinφ1 * Math.sin(φ2);
+    const λ2 = λ1 + Math.atan2(y, x);
+
+    let lat2 = Cesium.Math.toDegrees(φ2);
+    let lon2 = Cesium.Math.toDegrees(λ2);
+
+    lon2 = normLon(lon2);
+    return { lat: lat2, lon: lon2 };
+  }
+
   viewer.entities.add({
-    position: new Cesium.CallbackProperty(
-      () => Cesium.Cartesian3.fromDegrees(covLon, covLat, 10), false
-    ),
-    ellipse: {
-      semiMajorAxis: new Cesium.CallbackProperty(() => covRadiusSmoothM, false),
-      semiMinorAxis: new Cesium.CallbackProperty(() => covRadiusSmoothM, false),
-      material: Cesium.Color.YELLOW.withAlpha(COVER_ALPHA),
-      outline: true,
-      outlineColor: Cesium.Color.YELLOW.withAlpha(0.7),
-      height: 10,
-      extrudedHeight: 10
+    polyline: {
+      positions: new Cesium.CallbackProperty(() => {
+        if (!satrec) return [];
+
+        const nowDate = Cesium.JulianDate.toDate(viewer.clock.currentTime);
+        const s = propagateLLA(nowDate);
+        if (!s) return [];
+
+        const centerLat = s.lat;
+        const centerLon = normLon(s.lon);
+
+        const rTarget = clamp(coverageRadiusMeters(s.altKm * 1000, MIN_ELEV_DEG), 0, COVER_MAX_M);
+        covRadiusSmoothM += (rTarget - covRadiusSmoothM) * COVER_SMOOTH;
+
+        const pts = [];
+        const step = 360 / COVER_POINTS;
+
+        let prevLon = null;
+        let wrapOffset = 0;
+
+        for (let i = 0; i <= COVER_POINTS; i++) {
+          const brg = i * step;
+          const p = destinationLatLon(centerLat, centerLon, brg, covRadiusSmoothM);
+
+          let lon = p.lon;
+          if (prevLon != null) {
+            const d = lon - prevLon;
+            if (d > 180) wrapOffset -= 360;
+            else if (d < -180) wrapOffset += 360;
+          }
+          prevLon = lon;
+
+          pts.push(Cesium.Cartesian3.fromDegrees(lon + wrapOffset, p.lat, 5.0));
+        }
+        return pts;
+      }, false),
+      width: 2.0,
+      clampToGround: false,
+      arcType: Cesium.ArcType.GEODESIC,
+      material: new Cesium.PolylineGlowMaterialProperty({
+        glowPower: 0.12,
+        color: Cesium.Color.YELLOW.withAlpha(0.75)
+      })
     }
   });
 
-  /* ===================== HUD LOOP ===================== */
-  function updateHUD(){
+  /* ===================== PASS PLANNER ===================== */
+  function fmtTime(d){ return d.toISOString().replace("T"," ").replace("Z"," UTC"); }
+
+  function isOverIndia(lat, lon){
+    const L = normLon(lon);
+    return (
+      lat >= INDIA_BBOX.latMin && lat <= INDIA_BBOX.latMax &&
+      L   >= INDIA_BBOX.lonMin && L   <= INDIA_BBOX.lonMax
+    );
+  }
+
+  function lookElevationDeg(date, obsLat, obsLon, obsAltM){
+    if (!satrec) return null;
+
+    const pv = satellite.propagate(satrec, date);
+    if (!pv || !pv.position) return null;
+
+    const gmst = satellite.gstime(date);
+    const positionEcf = satellite.eciToEcf(pv.position, gmst);
+
+    const observerGd = {
+      latitude: Cesium.Math.toRadians(obsLat),
+      longitude: Cesium.Math.toRadians(obsLon),
+      height: obsAltM / 1000.0
+    };
+
+    const lookAngles = satellite.ecfToLookAngles(observerGd, positionEcf);
+    return Cesium.Math.toDegrees(lookAngles.elevation);
+  }
+
+  function findNextGroundPass(startDate, horizonHours = 24, stepSec = 15, minElevDeg = 10){
+    if (!satrec) return null;
+    const end = new Date(startDate.getTime() + horizonHours * 3600 * 1000);
+
+    let inPass = false;
+    let aos = null, los = null;
+    let maxEl = -999, tMax = null;
+
+    for (let t = new Date(startDate); t <= end; t = new Date(t.getTime() + stepSec*1000)) {
+      const elv = lookElevationDeg(t, GROUND_STATION.lat, GROUND_STATION.lon, GROUND_STATION.altM);
+      if (elv == null) continue;
+
+      const above = elv >= minElevDeg;
+
+      if (!inPass && above) {
+        inPass = true;
+        aos = new Date(t);
+        maxEl = elv; tMax = new Date(t);
+      }
+
+      if (inPass) {
+        if (elv > maxEl) { maxEl = elv; tMax = new Date(t); }
+        if (!above) {
+          los = new Date(t);
+          return { aos, los, maxEl, tMax };
+        }
+      }
+    }
+    return null;
+  }
+
+  function findNextIndiaOverflight(startDate, horizonHours = 24, stepSec = 30){
+    if (!satrec) return null;
+
+    const end = new Date(startDate.getTime() + horizonHours * 3600 * 1000);
+    let inside = false;
+    let enter = null, exit = null;
+    let maxAlt = -1, tMax = null, maxLatLon = null;
+
+    for (let t = new Date(startDate); t <= end; t = new Date(t.getTime() + stepSec*1000)) {
+      const s = propagateLLA(t);
+      if (!s) continue;
+
+      const isIn = isOverIndia(s.lat, s.lon);
+
+      if (!inside && isIn) {
+        inside = true;
+        enter = new Date(t);
+        maxAlt = s.altKm;
+        tMax = new Date(t);
+        maxLatLon = { lat: s.lat, lon: normLon(s.lon) };
+      }
+
+      if (inside) {
+        if (s.altKm > maxAlt) {
+          maxAlt = s.altKm;
+          tMax = new Date(t);
+          maxLatLon = { lat: s.lat, lon: normLon(s.lon) };
+        }
+        if (!isIn) {
+          exit = new Date(t);
+          return { enter, exit, maxAlt, tMax, maxLatLon };
+        }
+      }
+    }
+    return null;
+  }
+
+  async function showPassPlanner(){
+    if (!satrec) {
+      openModal("No TLE loaded yet.\n\nPublish a retained TLE to topic:\n" + TOPIC_TLE);
+      return;
+    }
+
+    openModal("Computing next passes…");
+
+    const now = new Date();
+    const pass = findNextGroundPass(now, 24, 10, 10);
+    const india = findNextIndiaOverflight(now, 24, 20);
+
+    let text = "";
+    text += `GROUND STATION: ${GROUND_STATION.name}\n`;
+    text += `Location: ${GROUND_STATION.lat.toFixed(5)}, ${GROUND_STATION.lon.toFixed(5)}\n`;
+    text += `Min elevation: 10°\n\n`;
+
+    if (pass) {
+      const durSec = Math.max(0, Math.floor((pass.los - pass.aos)/1000));
+      text += `NEXT GS PASS (AOS → LOS)\n`;
+      text += `AOS: ${fmtTime(pass.aos)}\n`;
+      text += `LOS: ${fmtTime(pass.los)}\n`;
+      text += `Duration: ${durSec} s\n`;
+      text += `Max Elev: ${pass.maxEl.toFixed(1)}° @ ${fmtTime(pass.tMax)}\n\n`;
+      text += `Suggestion: Uplink/Downlink window = between AOS and LOS.\n\n`;
+    } else {
+      text += `NEXT GS PASS\nNo pass found within 24h (min elevation 10°).\n\n`;
+    }
+
+    text += `NEXT OVER-INDIA WINDOW (approx bbox)\n`;
+    if (india) {
+      const durSec = Math.max(0, Math.floor((india.exit - india.enter)/1000));
+      text += `Enter: ${fmtTime(india.enter)}\n`;
+      text += `Exit : ${fmtTime(india.exit)}\n`;
+      text += `Duration: ${durSec} s\n`;
+      text += `Peak Alt: ${india.maxAlt.toFixed(1)} km @ ${fmtTime(india.tMax)}\n`;
+      if (india.maxLatLon) {
+        text += `Peak Subpoint: ${india.maxLatLon.lat.toFixed(2)}°, ${india.maxLatLon.lon.toFixed(2)}°\n`;
+      }
+    } else {
+      text += `No over-India crossing found within 24h.\n`;
+    }
+
+    openModal(text);
+  }
+
+  /* ===================== HUD UPDATES ===================== */
+  function updateHudPerFrame(){
     utcEl.textContent = nowUTCString();
 
     if (!satrec) {
@@ -489,11 +870,12 @@
       return;
     }
 
-    const s = propagateLLA(nowDateFromClock());
+    const nowDate = Cesium.JulianDate.toDate(viewer.clock.currentTime);
+    const s = propagateLLA(nowDate);
     if (!s) return;
 
     latEl.textContent = s.lat.toFixed(5) + "°";
-    lonEl.textContent = s.lon.toFixed(5) + "°";
+    lonEl.textContent = normLon(s.lon).toFixed(5) + "°";
     altEl.textContent = s.altKm.toFixed(1) + " km";
     spdEl.textContent = s.speedKmS.toFixed(3) + " km/s";
 
@@ -501,24 +883,16 @@
       tleAgeEl.textContent = Math.floor((Date.now() - tleReceivedAt.getTime())/1000) + " s";
     }
 
-    covLon = s.lon;
-    covLat = s.lat;
-    const targetR = coverageRadiusMeters(s.altKm * 1000, MIN_ELEV_DEG);
-    covRadiusSmoothM += (targetR - covRadiusSmoothM) * COVER_SMOOTH;
-
-    // Continuous follow in 2D
     if (viewer.scene.mode === Cesium.SceneMode.SCENE2D && follow2D) {
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, FOLLOW2D_HEIGHT_M)
       });
     }
 
-    viewer.scene.requestRender();
-    miniViewer.scene.requestRender();
     layoutMini();
   }
 
-  setInterval(updateHUD, 220);
+  viewer.scene.postRender.addEventListener(updateHudPerFrame);
   setInterval(appendSamplesAhead, APPEND_EVERY_MS);
 
   /* ===================== CAMERA / POV ===================== */
@@ -533,13 +907,6 @@
     });
   }
 
-  function fly2DZoomOut(){
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(INDIA_HOME.lon, INDIA_HOME.lat, ZOOM2D_HEIGHT_M),
-      duration: 0.9
-    });
-  }
-
   function setSatPOV(){
     setActive(btnSat);
     row2dOpts.style.display = "none";
@@ -547,7 +914,6 @@
     viewer.trackedEntity = satEntity;
     showMiniView(false);
     setStatus("Sat POV ✅");
-    viewer.scene.requestRender();
   }
 
   function setWorldPOV(){
@@ -560,33 +926,29 @@
     setStatus("World POV ✅");
   }
 
+  function fitWhole2DMap(){
+    viewer.camera.flyTo({ destination: Cesium.Rectangle.MAX_VALUE, duration: 0.9 });
+  }
+
   function set2DPOV(){
     setActive(btn2d);
     viewer.trackedEntity = undefined;
     viewer.scene.morphTo2D(0.8);
     row2dOpts.style.display = "flex";
 
-    if (follow2D) {
-      set2dActive(btn2dFollow);
-      showMiniView(false); // mini OFF while tracing
-      setStatus("2D Trace ✅");
-    } else {
-      set2dActive(btn2dZoom);
-      showMiniView(true); // mini ON only in zoom-out
-      setStatus("2D Zoom Out ✅");
-      setTimeout(fly2DZoomOut, 350);
-    }
+    follow2D = false;
+    set2dActive(btn2dZoom);
+    showMiniView(true);
+    setStatus("2D Zoom Out ✅");
 
-    viewer.scene.requestRender();
+    setTimeout(fitWhole2DMap, 250);
   }
 
-  // 2D option buttons
   btn2dFollow.onclick = () => {
     follow2D = true;
     set2dActive(btn2dFollow);
     showMiniView(false);
     setStatus("2D Trace ✅");
-    viewer.scene.requestRender();
   };
 
   btn2dZoom.onclick = () => {
@@ -594,7 +956,7 @@
     set2dActive(btn2dZoom);
     showMiniView(true);
     setStatus("2D Zoom Out ✅");
-    fly2DZoomOut();
+    fitWhole2DMap();
   };
 
   btnSat.onclick = setSatPOV;
@@ -603,6 +965,18 @@
 
   setSatPOV();
   layoutMini();
+
+  /* ===================== HOME BUTTON => PASS PLANNER ===================== */
+  viewer.homeButton.viewModel.command.beforeExecute.addEventListener((e) => {
+    e.cancel = true;
+
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(GROUND_STATION.lon, GROUND_STATION.lat, 2.2e6),
+      duration: 0.9
+    });
+
+    setTimeout(showPassPlanner, 250);
+  });
 
   /* ===================== APPLY TLE ===================== */
   function setTLE(name, l1, l2){
@@ -620,30 +994,47 @@
     else setSatPOV();
   }
 
-  /* ===================== MQTT ===================== */
+  /* ===================== MQTT (PERFECT + COMPAT SUBSCRIBE) ===================== */
   setStatus("Connecting MQTT…");
   mqEl.textContent = "Connecting…";
+  setLive("RECONNECT");
 
-  const mqttClient = mqtt.connect(MQTT_URLS[0], {
-    keepalive: 60,
+  console.log("[MQTT] connecting to", MQTT_WSS_URL);
+
+  const mqttClient = mqtt.connect(MQTT_WSS_URL, {
+    clientId: "cubesat-tracker-" + Math.random().toString(16).slice(2),
+    username: MQTT_USERNAME,
+    password: MQTT_PASSWORD,
+    protocol: "wss",
+    keepalive: 30,
     reconnectPeriod: 2000,
-    connectTimeout: 15000,
-    clean: true
+    connectTimeout: 20000,
+    clean: true,
+    resubscribe: true
   });
 
-  mqttClient.on("connect", () => {
+  mqttClient.on("connect", (connack) => {
+    console.log("[MQTT] CONNECT", connack);
     mqEl.textContent = "Connected ✅";
     setStatus("MQTT connected ✅");
+    setLive("LIVE");
 
-    mqttClient.subscribe([TOPIC_TLE, TOPIC_IMU], (err) => {
-      setStatus(err ? "Subscribe error ❌" : ("Subscribed ✅ " + TOPIC_TLE + " + " + TOPIC_IMU));
+    // ✅ Most compatible subscribe form (no array-of-objects)
+    mqttClient.subscribe(TOPIC_TLE, { qos: 1 }, (err, granted) => {
+      console.log("[MQTT] sub TLE", err, granted);
+      if (err) setStatus("Subscribe TLE error ❌");
+    });
+
+    mqttClient.subscribe(TOPIC_IMU, { qos: 0 }, (err, granted) => {
+      console.log("[MQTT] sub IMU", err, granted);
+      if (err) setStatus("Subscribe IMU error ❌");
     });
   });
 
   mqttClient.on("message", (topic, payload) => {
     const msg = payload.toString();
+    console.log("[MQTT] MSG", topic, msg);
 
-    // TLE
     if (topic === TOPIC_TLE) {
       const tle = parseTLEMessage(msg);
       if (!tle) { setStatus("Bad TLE format ❌"); return; }
@@ -651,7 +1042,6 @@
       return;
     }
 
-    // IMU attitude (roll/pitch/yaw)
     if (topic === TOPIC_IMU) {
       try {
         const data = JSON.parse(msg);
@@ -662,16 +1052,37 @@
         if (!Number.isNaN(r)) imu.roll = r;
         if (!Number.isNaN(p)) imu.pitch = p;
         if (!Number.isNaN(y)) imu.yaw = y;
-
-        viewer.scene.requestRender();
-        miniViewer.scene.requestRender();
-      } catch (e) {}
+      } catch {}
     }
   });
 
-  mqttClient.on("reconnect", () => { mqEl.textContent = "Reconnecting…"; setStatus("MQTT reconnecting…"); });
-  mqttClient.on("close", () => { mqEl.textContent = "Disconnected"; setStatus("MQTT disconnected"); });
-  mqttClient.on("error", (e) => { console.log("MQTT error", e); mqEl.textContent = "Error"; setStatus("MQTT error ❌"); });
+  mqttClient.on("reconnect", () => {
+    console.log("[MQTT] RECONNECT");
+    mqEl.textContent = "Reconnecting…";
+    setStatus("MQTT reconnecting…");
+    setLive("RECONNECT");
+  });
+
+  mqttClient.on("close", () => {
+    console.log("[MQTT] CLOSE");
+    mqEl.textContent = "Disconnected";
+    setStatus("MQTT disconnected");
+    setLive("OFFLINE");
+  });
+
+  mqttClient.on("offline", () => {
+    console.log("[MQTT] OFFLINE");
+    mqEl.textContent = "Offline";
+    setStatus("MQTT offline");
+    setLive("OFFLINE");
+  });
+
+  mqttClient.on("error", (e) => {
+    console.log("[MQTT] ERROR", e);
+    mqEl.textContent = "Error";
+    setStatus("MQTT error ❌");
+    setLive("OFFLINE");
+  });
 
 })();
 </script>
