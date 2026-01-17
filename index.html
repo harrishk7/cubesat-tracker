@@ -40,7 +40,6 @@
       backdrop-filter: blur(8px);
     }
 
-    /* LIVE pill */
     #livePill{
       display:inline-flex;
       align-items:center;
@@ -61,7 +60,6 @@
     }
     #liveTxt{ letter-spacing: 0.4px; opacity: 0.92; }
 
-    /* Mini view */
     #miniSatView{
       position:absolute;
       left:12px;
@@ -110,7 +108,6 @@
       line-height: 1.35;
     }
 
-    /* Modal */
     #modal{
       position:absolute;
       inset:0;
@@ -204,6 +201,7 @@
     <div class="kv"><div class="k">TLE Age</div><div class="v" id="tleAge">—</div></div>
 
     <pre id="tleBox">Waiting for TLE…</pre>
+    <pre id="imuBox">IMU: waiting…</pre>
   </div>
 
   <div id="miniSatView"></div>
@@ -215,12 +213,31 @@
   /* ===================== CONFIG ===================== */
   const MODEL_URI = "./assets/CubeSat.glb";
 
+  /* ===================== PERF (butter smooth) ===================== */
+  const PERF = {
+    // Update cached orbit state at fixed Hz (NOT every frame)
+    STATE_HZ: 25,
+
+    // Update coverage ring slower
+    COVER_HZ: 8,
+
+    // Orbit samples: fewer points + smooth interpolation
+    SAMPLE_STEP_SEC: 5,
+
+    // Terrain is expensive. Keep OFF for smooth.
+    ENABLE_WORLD_TERRAIN: false,
+    ENABLE_LIGHTING: true,      // looks nice; if lag → set false
+    DEPTH_TEST_TERRAIN: false,
+
+    // Globe tuning
+    MAX_SSE: 2.0,
+    TILE_CACHE: 600,
+    FXAA: true
+  };
+
   /* ===== HiveMQ Cloud (Browser must use WSS) ===== */
   const MQTT_HOST = "4bde42256ac0461d872447cc72b1a99f.s1.eu.hivemq.cloud";
   const MQTT_WS_PORT = 8884;
-
-  // ✅ Use the exact URL format HiveMQ Cloud expects.
-  // If your console shows "WebSocket URL", match it exactly.
   const MQTT_WSS_URL = `wss://${MQTT_HOST}:${MQTT_WS_PORT}/mqtt`;
 
   const MQTT_USERNAME = "hivemq.webclient.1768060269881";
@@ -235,21 +252,19 @@
 
   /* ===== Ground Station ===== */
   const GROUND_STATION = { name: "ground_station", lat: 13.0037, lon: 80.2041, altM: 12 };
-
   const INDIA_BBOX = { latMin: 6.0, latMax: 37.5, lonMin: 68.0, lonMax: 98.0 };
 
-  // Orbit sampling
+  // Orbit sampling horizon
   const SAMPLE_PAST_SEC   = 70 * 60;
   const SAMPLE_FUTURE_SEC = 70 * 60;
-  const SAMPLE_STEP_SEC   = 1;
 
-  // Smoother updates
-  const APPEND_AHEAD_SEC  = 180;
+  // Append samples ahead
+  const APPEND_AHEAD_SEC  = 240;
   const APPEND_EVERY_MS   = 250;
 
   // Coverage ring
   const MIN_ELEV_DEG = 10;
-  const COVER_SMOOTH = 0.12;
+  const COVER_SMOOTH = 0.14;
   const COVER_POINTS = 96;
   const COVER_MAX_M  = 6500000;
 
@@ -257,19 +272,29 @@
   const imu = { roll: 0, pitch: 0, yaw: 0 };
   const IMU_SIGN = { roll: +1, pitch: +1, yaw: +1 };
 
+  // ✅ auto-zero so start = 0,0,0
+  let imuZero = null;
+
   // 2D behavior
   let follow2D = false;
   const FOLLOW2D_HEIGHT_M = 1.8e6;
 
   function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+  function normLon(lon){
+    let L = lon;
+    while (L > 180) L -= 360;
+    while (L < -180) L += 360;
+    return L;
+  }
+
   const DPR = clamp(window.devicePixelRatio || 1, 1, 2);
-  const RES_SCALE = clamp(DPR * 1.35, 1, 2);
+  const RES_SCALE = clamp(DPR * 1.2, 1, 2);
 
   /* ===================== DOM ===================== */
   const el = (id) => document.getElementById(id);
   const stEl = el("st"), utcEl = el("utc"), latEl = el("lat"), lonEl = el("lon"),
         altEl = el("alt"), spdEl = el("spd"), mqEl = el("mq"),
-        tleAgeEl = el("tleAge"), tleBox = el("tleBox");
+        tleAgeEl = el("tleAge"), tleBox = el("tleBox"), imuBox = el("imuBox");
 
   const btnSat = el("btnSat"), btnWorld = el("btnWorld"), btn2d = el("btn2d");
   const row2dOpts = el("row2dOpts");
@@ -285,6 +310,9 @@
   const modal = el("modal");
   const modalBody = el("modalBody");
   const modalClose = el("modalClose");
+
+  function setStatus(s){ stEl.textContent = s; }
+  function nowUTCString(){ return new Date().toISOString().replace("T"," ").replace("Z"," UTC"); }
 
   function setLive(mode){
     liveTxt.textContent = mode;
@@ -313,9 +341,6 @@
     btn.classList.add("active");
   }
 
-  function setStatus(s){ stEl.textContent = s; }
-  function nowUTCString(){ return new Date().toISOString().replace("T"," ").replace("Z"," UTC"); }
-
   function showMiniView(show){
     miniDiv.style.display = show ? "block" : "none";
     layoutMini();
@@ -330,19 +355,9 @@
     modalBody.textContent = text;
     modal.style.display = "flex";
   }
-  function closeModal(){
-    modal.style.display = "none";
-  }
+  function closeModal(){ modal.style.display = "none"; }
   modalClose.onclick = closeModal;
   modal.onclick = (e)=>{ if (e.target === modal) closeModal(); };
-
-  /* ===================== HELPERS ===================== */
-  function normLon(lon){
-    let L = lon;
-    while (L > 180) L -= 360;
-    while (L < -180) L += 360;
-    return L;
-  }
 
   /* ===================== CESIUM VIEWER ===================== */
   const viewer = new Cesium.Viewer("cesiumContainer", {
@@ -364,17 +379,20 @@
   viewer.scene.skyAtmosphere.show = false;
 
   viewer.resolutionScale = RES_SCALE;
-  viewer.scene.postProcessStages.fxaa.enabled = true;
-  viewer.scene.globe.maximumScreenSpaceError = 1.0;
-  viewer.scene.globe.tileCacheSize = 1200;
-  viewer.scene.globe.enableLighting = true;
-  viewer.scene.globe.depthTestAgainstTerrain = true;
+  viewer.scene.postProcessStages.fxaa.enabled = !!PERF.FXAA;
 
-  try {
-    if (Cesium.createWorldTerrainAsync) {
-      viewer.terrainProvider = await Cesium.createWorldTerrainAsync();
-    }
-  } catch {}
+  viewer.scene.globe.maximumScreenSpaceError = PERF.MAX_SSE;
+  viewer.scene.globe.tileCacheSize = PERF.TILE_CACHE;
+  viewer.scene.globe.enableLighting = !!PERF.ENABLE_LIGHTING;
+  viewer.scene.globe.depthTestAgainstTerrain = !!PERF.DEPTH_TEST_TERRAIN;
+
+  if (PERF.ENABLE_WORLD_TERRAIN) {
+    try {
+      if (Cesium.createWorldTerrainAsync) {
+        viewer.terrainProvider = await Cesium.createWorldTerrainAsync();
+      }
+    } catch {}
+  }
 
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(INDIA_HOME.lon, INDIA_HOME.lat, INDIA_HOME.height)
@@ -405,23 +423,17 @@
   miniViewer.scene.skyAtmosphere.show = false;
 
   miniViewer.resolutionScale = RES_SCALE;
-  miniViewer.scene.postProcessStages.fxaa.enabled = true;
-  miniViewer.scene.globe.maximumScreenSpaceError = 1.0;
-  miniViewer.scene.globe.tileCacheSize = 600;
-  miniViewer.scene.globe.enableLighting = true;
-  miniViewer.scene.globe.depthTestAgainstTerrain = true;
-
-  try {
-    if (Cesium.createWorldTerrainAsync) {
-      miniViewer.terrainProvider = await Cesium.createWorldTerrainAsync();
-    }
-  } catch {}
+  miniViewer.scene.postProcessStages.fxaa.enabled = !!PERF.FXAA;
+  miniViewer.scene.globe.maximumScreenSpaceError = PERF.MAX_SSE;
+  miniViewer.scene.globe.tileCacheSize = Math.floor(PERF.TILE_CACHE * 0.6);
+  miniViewer.scene.globe.enableLighting = !!PERF.ENABLE_LIGHTING;
+  miniViewer.scene.globe.depthTestAgainstTerrain = !!PERF.DEPTH_TEST_TERRAIN;
 
   miniViewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK_MULTIPLIER;
   miniViewer.clock.multiplier = 1;
   miniViewer.clock.shouldAnimate = true;
 
-  /* ===================== GROUND STATION (LOCKED IN ALL MODES) ===================== */
+  /* ===================== GROUND STATION ===================== */
   const gsPos = new Cesium.CallbackProperty(() => {
     return Cesium.Cartesian3.fromDegrees(GROUND_STATION.lon, GROUND_STATION.lat, 0);
   }, false);
@@ -515,8 +527,8 @@
   /* ===================== SAMPLED POSITION ===================== */
   let sampledPos = new Cesium.SampledPositionProperty();
   sampledPos.setInterpolationOptions({
-    interpolationDegree: 5,
-    interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
+    interpolationDegree: 2,
+    interpolationAlgorithm: Cesium.HermitePolynomialApproximation
   });
 
   let lastSampledTo = null;
@@ -524,22 +536,17 @@
   let miniSatEntity = null;
 
   function clearSamples(){
-    if (sampledPos && typeof sampledPos.removeAllSamples === "function") {
-      sampledPos.removeAllSamples();
-    } else {
-      sampledPos = new Cesium.SampledPositionProperty();
-      sampledPos.setInterpolationOptions({
-        interpolationDegree: 5,
-        interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
-      });
-    }
+    sampledPos = new Cesium.SampledPositionProperty();
+    sampledPos.setInterpolationOptions({
+      interpolationDegree: 2,
+      interpolationAlgorithm: Cesium.HermitePolynomialApproximation
+    });
     if (satEntity) satEntity.position = sampledPos;
     if (miniSatEntity) miniSatEntity.position = sampledPos;
   }
 
   function syncClocksTo(centerDate){
     const center = Cesium.JulianDate.fromDate(centerDate);
-
     viewer.clock.currentTime = center.clone();
     viewer.clock.startTime   = Cesium.JulianDate.addSeconds(center, -SAMPLE_PAST_SEC, new Cesium.JulianDate());
     viewer.clock.stopTime    = Cesium.JulianDate.addSeconds(center,  SAMPLE_FUTURE_SEC, new Cesium.JulianDate());
@@ -553,13 +560,13 @@
     miniViewer.clock.shouldAnimate = true;
   }
 
-  function clearAndSeedSamples(centerDate){
+  function seedSamples(centerDate){
     clearSamples();
     lastSampledTo = null;
     syncClocksTo(centerDate);
 
     const center = Cesium.JulianDate.fromDate(centerDate);
-    for (let t = -SAMPLE_PAST_SEC; t <= SAMPLE_FUTURE_SEC; t += SAMPLE_STEP_SEC) {
+    for (let t = -SAMPLE_PAST_SEC; t <= SAMPLE_FUTURE_SEC; t += PERF.SAMPLE_STEP_SEC) {
       const d = new Date(centerDate.getTime() + t*1000);
       const s = propagateLLA(d);
       if (!s) continue;
@@ -575,7 +582,7 @@
     const target = Cesium.JulianDate.addSeconds(now, APPEND_AHEAD_SEC, new Cesium.JulianDate());
 
     while (Cesium.JulianDate.lessThan(lastSampledTo, target)) {
-      const next = Cesium.JulianDate.addSeconds(lastSampledTo, SAMPLE_STEP_SEC, new Cesium.JulianDate());
+      const next = Cesium.JulianDate.addSeconds(lastSampledTo, PERF.SAMPLE_STEP_SEC, new Cesium.JulianDate());
       const d = Cesium.JulianDate.toDate(next);
       const s = propagateLLA(d);
       if (s) sampledPos.addSample(next, llaToCartesian(s.lat, s.lon, s.altKm));
@@ -583,20 +590,45 @@
     }
   }
 
-  /* ===================== ORIENTATION (IMU -> CESIUM) ===================== */
+  /* ===================== STATE CACHE (NO LAG) ===================== */
+  let state = { lat: 0, lon: 0, altKm: 0, speedKmS: 0 };
+  let lastStateMs = 0;
+  const STATE_DT_MS = 1000 / PERF.STATE_HZ;
+
+  function updateStateCache(){
+    if (!satrec) return;
+    const nowMs = performance.now();
+    if (nowMs - lastStateMs < STATE_DT_MS) return;
+    lastStateMs = nowMs;
+
+    const nowDate = Cesium.JulianDate.toDate(viewer.clock.currentTime);
+    const s = propagateLLA(nowDate);
+    if (s) state = s;
+  }
+
+  /* ===================== IMU -> Orientation ===================== */
+  function getImuHPR(){
+    const z = imuZero || { roll: 0, pitch: 0, yaw: 0 };
+    const roll  = (imu.roll  - z.roll)  * IMU_SIGN.roll;
+    const pitch = (imu.pitch - z.pitch) * IMU_SIGN.pitch;
+    const yaw   = (imu.yaw   - z.yaw)   * IMU_SIGN.yaw;
+
+    return {
+      h: Cesium.Math.toRadians(yaw),
+      p: Cesium.Math.toRadians(pitch),
+      r: Cesium.Math.toRadians(roll)
+    };
+  }
+
   const imuOrientation = new Cesium.CallbackProperty((time) => {
     const pos = sampledPos.getValue(time, new Cesium.Cartesian3());
     if (!pos) return Cesium.Quaternion.IDENTITY;
-
-    const h = Cesium.Math.toRadians((imu.yaw   || 0) * IMU_SIGN.yaw);
-    const p = Cesium.Math.toRadians((imu.pitch || 0) * IMU_SIGN.pitch);
-    const r = Cesium.Math.toRadians((imu.roll  || 0) * IMU_SIGN.roll);
-
+    const { h, p, r } = getImuHPR();
     const hpr = new Cesium.HeadingPitchRoll(h, p, r);
     return Cesium.Transforms.headingPitchRollQuaternion(pos, hpr);
   }, false);
 
-  /* ===================== SAT ENTITY ===================== */
+  /* ===================== SAT ENTITY (GLB + fallback point) ===================== */
   satEntity = viewer.entities.add({
     name: "CubeSat",
     position: sampledPos,
@@ -606,6 +638,12 @@
       minimumPixelSize: 70,
       maximumScale: 80000,
       shadows: Cesium.ShadowMode.DISABLED
+    },
+    point: { // fallback if GLB fails
+      pixelSize: 8,
+      color: Cesium.Color.CYAN,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 2
     },
     label: {
       text: new Cesium.CallbackProperty(() => satName, false),
@@ -638,12 +676,16 @@
       minimumPixelSize: 90,
       maximumScale: 120000,
       shadows: Cesium.ShadowMode.DISABLED
-    }
+    },
+    point: { pixelSize: 8, color: Cesium.Color.CYAN }
   });
   miniViewer.trackedEntity = miniSatEntity;
 
-  /* ===================== COVERAGE AREA ===================== */
+  /* ===================== COVERAGE RING (THROTTLED) ===================== */
   let covRadiusSmoothM = 0;
+  let cachedRing = [];
+  let lastCoverMs = 0;
+  const COVER_DT_MS = 1000 / PERF.COVER_HZ;
 
   function destinationLatLon(latDeg, lonDeg, bearingDeg, distanceM){
     const R = 6378137.0;
@@ -669,43 +711,45 @@
     return { lat: lat2, lon: lon2 };
   }
 
+  function updateCoverageCache(){
+    if (!satrec) { cachedRing = []; return; }
+
+    const nowMs = performance.now();
+    if (nowMs - lastCoverMs < COVER_DT_MS) return;
+    lastCoverMs = nowMs;
+
+    const centerLat = state.lat;
+    const centerLon = normLon(state.lon);
+
+    const rTarget = clamp(coverageRadiusMeters(state.altKm * 1000, MIN_ELEV_DEG), 0, COVER_MAX_M);
+    covRadiusSmoothM += (rTarget - covRadiusSmoothM) * COVER_SMOOTH;
+
+    const pts = [];
+    const step = 360 / COVER_POINTS;
+
+    let prevLon = null;
+    let wrapOffset = 0;
+
+    for (let i = 0; i <= COVER_POINTS; i++) {
+      const brg = i * step;
+      const p = destinationLatLon(centerLat, centerLon, brg, covRadiusSmoothM);
+
+      let lon = p.lon;
+      if (prevLon != null) {
+        const d = lon - prevLon;
+        if (d > 180) wrapOffset -= 360;
+        else if (d < -180) wrapOffset += 360;
+      }
+      prevLon = lon;
+
+      pts.push(Cesium.Cartesian3.fromDegrees(lon + wrapOffset, p.lat, 5.0));
+    }
+    cachedRing = pts;
+  }
+
   viewer.entities.add({
     polyline: {
-      positions: new Cesium.CallbackProperty(() => {
-        if (!satrec) return [];
-
-        const nowDate = Cesium.JulianDate.toDate(viewer.clock.currentTime);
-        const s = propagateLLA(nowDate);
-        if (!s) return [];
-
-        const centerLat = s.lat;
-        const centerLon = normLon(s.lon);
-
-        const rTarget = clamp(coverageRadiusMeters(s.altKm * 1000, MIN_ELEV_DEG), 0, COVER_MAX_M);
-        covRadiusSmoothM += (rTarget - covRadiusSmoothM) * COVER_SMOOTH;
-
-        const pts = [];
-        const step = 360 / COVER_POINTS;
-
-        let prevLon = null;
-        let wrapOffset = 0;
-
-        for (let i = 0; i <= COVER_POINTS; i++) {
-          const brg = i * step;
-          const p = destinationLatLon(centerLat, centerLon, brg, covRadiusSmoothM);
-
-          let lon = p.lon;
-          if (prevLon != null) {
-            const d = lon - prevLon;
-            if (d > 180) wrapOffset -= 360;
-            else if (d < -180) wrapOffset += 360;
-          }
-          prevLon = lon;
-
-          pts.push(Cesium.Cartesian3.fromDegrees(lon + wrapOffset, p.lat, 5.0));
-        }
-        return pts;
-      }, false),
+      positions: new Cesium.CallbackProperty(() => cachedRing, false),
       width: 2.0,
       clampToGround: false,
       arcType: Cesium.ArcType.GEODESIC,
@@ -716,153 +760,12 @@
     }
   });
 
-  /* ===================== PASS PLANNER ===================== */
-  function fmtTime(d){ return d.toISOString().replace("T"," ").replace("Z"," UTC"); }
-
-  function isOverIndia(lat, lon){
-    const L = normLon(lon);
-    return (
-      lat >= INDIA_BBOX.latMin && lat <= INDIA_BBOX.latMax &&
-      L   >= INDIA_BBOX.lonMin && L   <= INDIA_BBOX.lonMax
-    );
-  }
-
-  function lookElevationDeg(date, obsLat, obsLon, obsAltM){
-    if (!satrec) return null;
-
-    const pv = satellite.propagate(satrec, date);
-    if (!pv || !pv.position) return null;
-
-    const gmst = satellite.gstime(date);
-    const positionEcf = satellite.eciToEcf(pv.position, gmst);
-
-    const observerGd = {
-      latitude: Cesium.Math.toRadians(obsLat),
-      longitude: Cesium.Math.toRadians(obsLon),
-      height: obsAltM / 1000.0
-    };
-
-    const lookAngles = satellite.ecfToLookAngles(observerGd, positionEcf);
-    return Cesium.Math.toDegrees(lookAngles.elevation);
-  }
-
-  function findNextGroundPass(startDate, horizonHours = 24, stepSec = 15, minElevDeg = 10){
-    if (!satrec) return null;
-    const end = new Date(startDate.getTime() + horizonHours * 3600 * 1000);
-
-    let inPass = false;
-    let aos = null, los = null;
-    let maxEl = -999, tMax = null;
-
-    for (let t = new Date(startDate); t <= end; t = new Date(t.getTime() + stepSec*1000)) {
-      const elv = lookElevationDeg(t, GROUND_STATION.lat, GROUND_STATION.lon, GROUND_STATION.altM);
-      if (elv == null) continue;
-
-      const above = elv >= minElevDeg;
-
-      if (!inPass && above) {
-        inPass = true;
-        aos = new Date(t);
-        maxEl = elv; tMax = new Date(t);
-      }
-
-      if (inPass) {
-        if (elv > maxEl) { maxEl = elv; tMax = new Date(t); }
-        if (!above) {
-          los = new Date(t);
-          return { aos, los, maxEl, tMax };
-        }
-      }
-    }
-    return null;
-  }
-
-  function findNextIndiaOverflight(startDate, horizonHours = 24, stepSec = 30){
-    if (!satrec) return null;
-
-    const end = new Date(startDate.getTime() + horizonHours * 3600 * 1000);
-    let inside = false;
-    let enter = null, exit = null;
-    let maxAlt = -1, tMax = null, maxLatLon = null;
-
-    for (let t = new Date(startDate); t <= end; t = new Date(t.getTime() + stepSec*1000)) {
-      const s = propagateLLA(t);
-      if (!s) continue;
-
-      const isIn = isOverIndia(s.lat, s.lon);
-
-      if (!inside && isIn) {
-        inside = true;
-        enter = new Date(t);
-        maxAlt = s.altKm;
-        tMax = new Date(t);
-        maxLatLon = { lat: s.lat, lon: normLon(s.lon) };
-      }
-
-      if (inside) {
-        if (s.altKm > maxAlt) {
-          maxAlt = s.altKm;
-          tMax = new Date(t);
-          maxLatLon = { lat: s.lat, lon: normLon(s.lon) };
-        }
-        if (!isIn) {
-          exit = new Date(t);
-          return { enter, exit, maxAlt, tMax, maxLatLon };
-        }
-      }
-    }
-    return null;
-  }
-
-  async function showPassPlanner(){
-    if (!satrec) {
-      openModal("No TLE loaded yet.\n\nPublish a retained TLE to topic:\n" + TOPIC_TLE);
-      return;
-    }
-
-    openModal("Computing next passes…");
-
-    const now = new Date();
-    const pass = findNextGroundPass(now, 24, 10, 10);
-    const india = findNextIndiaOverflight(now, 24, 20);
-
-    let text = "";
-    text += `GROUND STATION: ${GROUND_STATION.name}\n`;
-    text += `Location: ${GROUND_STATION.lat.toFixed(5)}, ${GROUND_STATION.lon.toFixed(5)}\n`;
-    text += `Min elevation: 10°\n\n`;
-
-    if (pass) {
-      const durSec = Math.max(0, Math.floor((pass.los - pass.aos)/1000));
-      text += `NEXT GS PASS (AOS → LOS)\n`;
-      text += `AOS: ${fmtTime(pass.aos)}\n`;
-      text += `LOS: ${fmtTime(pass.los)}\n`;
-      text += `Duration: ${durSec} s\n`;
-      text += `Max Elev: ${pass.maxEl.toFixed(1)}° @ ${fmtTime(pass.tMax)}\n\n`;
-      text += `Suggestion: Uplink/Downlink window = between AOS and LOS.\n\n`;
-    } else {
-      text += `NEXT GS PASS\nNo pass found within 24h (min elevation 10°).\n\n`;
-    }
-
-    text += `NEXT OVER-INDIA WINDOW (approx bbox)\n`;
-    if (india) {
-      const durSec = Math.max(0, Math.floor((india.exit - india.enter)/1000));
-      text += `Enter: ${fmtTime(india.enter)}\n`;
-      text += `Exit : ${fmtTime(india.exit)}\n`;
-      text += `Duration: ${durSec} s\n`;
-      text += `Peak Alt: ${india.maxAlt.toFixed(1)} km @ ${fmtTime(india.tMax)}\n`;
-      if (india.maxLatLon) {
-        text += `Peak Subpoint: ${india.maxLatLon.lat.toFixed(2)}°, ${india.maxLatLon.lon.toFixed(2)}°\n`;
-      }
-    } else {
-      text += `No over-India crossing found within 24h.\n`;
-    }
-
-    openModal(text);
-  }
-
-  /* ===================== HUD UPDATES ===================== */
-  function updateHudPerFrame(){
+  /* ===================== HUD UPDATE ===================== */
+  function updateHud(){
     utcEl.textContent = nowUTCString();
+
+    updateStateCache();
+    updateCoverageCache();
 
     if (!satrec) {
       latEl.textContent = lonEl.textContent = altEl.textContent = spdEl.textContent = "—";
@@ -870,43 +773,32 @@
       return;
     }
 
-    const nowDate = Cesium.JulianDate.toDate(viewer.clock.currentTime);
-    const s = propagateLLA(nowDate);
-    if (!s) return;
-
-    latEl.textContent = s.lat.toFixed(5) + "°";
-    lonEl.textContent = normLon(s.lon).toFixed(5) + "°";
-    altEl.textContent = s.altKm.toFixed(1) + " km";
-    spdEl.textContent = s.speedKmS.toFixed(3) + " km/s";
+    latEl.textContent = state.lat.toFixed(5) + "°";
+    lonEl.textContent = normLon(state.lon).toFixed(5) + "°";
+    altEl.textContent = state.altKm.toFixed(1) + " km";
+    spdEl.textContent = state.speedKmS.toFixed(3) + " km/s";
 
     if (tleReceivedAt) {
       tleAgeEl.textContent = Math.floor((Date.now() - tleReceivedAt.getTime())/1000) + " s";
     }
 
+    imuBox.textContent =
+      `IMU (raw):  r=${imu.roll.toFixed(2)}  p=${imu.pitch.toFixed(2)}  y=${imu.yaw.toFixed(2)}\n` +
+      `IMU (zero): ${imuZero ? `r=${imuZero.roll.toFixed(2)} p=${imuZero.pitch.toFixed(2)} y=${imuZero.yaw.toFixed(2)}` : "waiting…"}`;
+
     if (viewer.scene.mode === Cesium.SceneMode.SCENE2D && follow2D) {
       viewer.camera.setView({
-        destination: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, FOLLOW2D_HEIGHT_M)
+        destination: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, FOLLOW2D_HEIGHT_M)
       });
     }
 
     layoutMini();
   }
 
-  viewer.scene.postRender.addEventListener(updateHudPerFrame);
+  viewer.scene.postRender.addEventListener(updateHud);
   setInterval(appendSamplesAhead, APPEND_EVERY_MS);
 
-  /* ===================== CAMERA / POV ===================== */
-  function flyToSatGlobalView(){
-    viewer.flyTo(satEntity, {
-      duration: 1.1,
-      offset: new Cesium.HeadingPitchRange(
-        Cesium.Math.toRadians(20),
-        Cesium.Math.toRadians(-35),
-        WORLD_ALT
-      )
-    });
-  }
-
+  /* ===================== POV ===================== */
   function setSatPOV(){
     setActive(btnSat);
     row2dOpts.style.display = "none";
@@ -916,13 +808,20 @@
     setStatus("Sat POV ✅");
   }
 
+  // ✅ World POV = track satellite but with far camera offset (feels like Earth moves under it)
   function setWorldPOV(){
     setActive(btnWorld);
     row2dOpts.style.display = "none";
     viewer.scene.morphTo3D(0.6);
-    viewer.trackedEntity = undefined;
+    viewer.trackedEntity = satEntity;
     showMiniView(true);
-    flyToSatGlobalView();
+
+    viewer.zoomTo(satEntity, new Cesium.HeadingPitchRange(
+      Cesium.Math.toRadians(20),
+      Cesium.Math.toRadians(-35),
+      WORLD_ALT
+    ));
+
     setStatus("World POV ✅");
   }
 
@@ -966,15 +865,132 @@
   setSatPOV();
   layoutMini();
 
-  /* ===================== HOME BUTTON => PASS PLANNER ===================== */
+  /* ===================== PASS PLANNER (kept minimal) ===================== */
+  function fmtTime(d){ return d.toISOString().replace("T"," ").replace("Z"," UTC"); }
+
+  function isOverIndia(lat, lon){
+    const L = normLon(lon);
+    return (
+      lat >= INDIA_BBOX.latMin && lat <= INDIA_BBOX.latMax &&
+      L   >= INDIA_BBOX.lonMin && L   <= INDIA_BBOX.lonMax
+    );
+  }
+
+  function lookElevationDeg(date, obsLat, obsLon, obsAltM){
+    if (!satrec) return null;
+    const pv = satellite.propagate(satrec, date);
+    if (!pv || !pv.position) return null;
+
+    const gmst = satellite.gstime(date);
+    const positionEcf = satellite.eciToEcf(pv.position, gmst);
+
+    const observerGd = {
+      latitude: Cesium.Math.toRadians(obsLat),
+      longitude: Cesium.Math.toRadians(obsLon),
+      height: obsAltM / 1000.0
+    };
+
+    const lookAngles = satellite.ecfToLookAngles(observerGd, positionEcf);
+    return Cesium.Math.toDegrees(lookAngles.elevation);
+  }
+
+  function findNextGroundPass(startDate, horizonHours = 24, stepSec = 10, minElevDeg = 10){
+    if (!satrec) return null;
+    const end = new Date(startDate.getTime() + horizonHours * 3600 * 1000);
+
+    let inPass = false;
+    let aos = null, los = null;
+    let maxEl = -999, tMax = null;
+
+    for (let t = new Date(startDate); t <= end; t = new Date(t.getTime() + stepSec*1000)) {
+      const elv = lookElevationDeg(t, GROUND_STATION.lat, GROUND_STATION.lon, GROUND_STATION.altM);
+      if (elv == null) continue;
+
+      const above = elv >= minElevDeg;
+
+      if (!inPass && above) {
+        inPass = true;
+        aos = new Date(t);
+        maxEl = elv; tMax = new Date(t);
+      }
+
+      if (inPass) {
+        if (elv > maxEl) { maxEl = elv; tMax = new Date(t); }
+        if (!above) {
+          los = new Date(t);
+          return { aos, los, maxEl, tMax };
+        }
+      }
+    }
+    return null;
+  }
+
+  function findNextIndiaOverflight(startDate, horizonHours = 24, stepSec = 20){
+    if (!satrec) return null;
+
+    const end = new Date(startDate.getTime() + horizonHours * 3600 * 1000);
+    let inside = false;
+    let enter = null, exit = null;
+
+    for (let t = new Date(startDate); t <= end; t = new Date(t.getTime() + stepSec*1000)) {
+      const s = propagateLLA(t);
+      if (!s) continue;
+
+      const isIn = isOverIndia(s.lat, s.lon);
+
+      if (!inside && isIn) { inside = true; enter = new Date(t); }
+      if (inside && !isIn) { exit = new Date(t); return { enter, exit }; }
+    }
+    return null;
+  }
+
+  async function showPassPlanner(){
+    if (!satrec) {
+      openModal("No TLE loaded yet.\n\nPublish a retained TLE to:\n" + TOPIC_TLE);
+      return;
+    }
+
+    openModal("Computing next passes…");
+
+    const now = new Date();
+    const pass = findNextGroundPass(now, 24, 10, 10);
+    const india = findNextIndiaOverflight(now, 24, 20);
+
+    let text = "";
+    text += `GROUND STATION: ${GROUND_STATION.name}\n`;
+    text += `Location: ${GROUND_STATION.lat.toFixed(5)}, ${GROUND_STATION.lon.toFixed(5)}\n`;
+    text += `Min elevation: 10°\n\n`;
+
+    if (pass) {
+      const durSec = Math.max(0, Math.floor((pass.los - pass.aos)/1000));
+      text += `NEXT GS PASS (AOS → LOS)\n`;
+      text += `AOS: ${fmtTime(pass.aos)}\n`;
+      text += `LOS: ${fmtTime(pass.los)}\n`;
+      text += `Duration: ${durSec} s\n`;
+      text += `Max Elev: ${pass.maxEl.toFixed(1)}° @ ${fmtTime(pass.tMax)}\n\n`;
+    } else {
+      text += `NEXT GS PASS\nNo pass found within 24h.\n\n`;
+    }
+
+    text += `NEXT OVER-INDIA WINDOW (bbox)\n`;
+    if (india) {
+      const durSec = Math.max(0, Math.floor((india.exit - india.enter)/1000));
+      text += `Enter: ${fmtTime(india.enter)}\n`;
+      text += `Exit : ${fmtTime(india.exit)}\n`;
+      text += `Duration: ${durSec} s\n`;
+    } else {
+      text += `No over-India crossing found within 24h.\n`;
+    }
+
+    openModal(text);
+  }
+
   viewer.homeButton.viewModel.command.beforeExecute.addEventListener((e) => {
     e.cancel = true;
-
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(GROUND_STATION.lon, GROUND_STATION.lat, 2.2e6),
       duration: 0.9
     });
-
     setTimeout(showPassPlanner, 250);
   });
 
@@ -987,19 +1003,25 @@
     tleBox.textContent = `${satName}\n${l1}\n${l2}`;
     setStatus("TLE loaded ✅");
 
-    clearAndSeedSamples(new Date());
+    // reset IMU zero so it starts as 0,0,0 after new TLE (optional)
+    // imuZero = null;
+
+    seedSamples(new Date());
+
+    // jump to current
+    updateStateCache();
 
     if (btnWorld.classList.contains("active")) setWorldPOV();
     else if (btn2d.classList.contains("active")) set2DPOV();
     else setSatPOV();
   }
 
-  /* ===================== MQTT (PERFECT + COMPAT SUBSCRIBE) ===================== */
+  /* ===================== MQTT ===================== */
   setStatus("Connecting MQTT…");
   mqEl.textContent = "Connecting…";
   setLive("RECONNECT");
 
-  console.log("[MQTT] connecting to", MQTT_WSS_URL);
+  console.log("[MQTT] connecting:", MQTT_WSS_URL);
 
   const mqttClient = mqtt.connect(MQTT_WSS_URL, {
     clientId: "cubesat-tracker-" + Math.random().toString(16).slice(2),
@@ -1013,27 +1035,17 @@
     resubscribe: true
   });
 
-  mqttClient.on("connect", (connack) => {
-    console.log("[MQTT] CONNECT", connack);
+  mqttClient.on("connect", () => {
     mqEl.textContent = "Connected ✅";
     setStatus("MQTT connected ✅");
     setLive("LIVE");
 
-    // ✅ Most compatible subscribe form (no array-of-objects)
-    mqttClient.subscribe(TOPIC_TLE, { qos: 1 }, (err, granted) => {
-      console.log("[MQTT] sub TLE", err, granted);
-      if (err) setStatus("Subscribe TLE error ❌");
-    });
-
-    mqttClient.subscribe(TOPIC_IMU, { qos: 0 }, (err, granted) => {
-      console.log("[MQTT] sub IMU", err, granted);
-      if (err) setStatus("Subscribe IMU error ❌");
-    });
+    mqttClient.subscribe(TOPIC_TLE, { qos: 1 }, (err) => { if (err) setStatus("Subscribe TLE error ❌"); });
+    mqttClient.subscribe(TOPIC_IMU, { qos: 0 }, (err) => { if (err) setStatus("Subscribe IMU error ❌"); });
   });
 
   mqttClient.on("message", (topic, payload) => {
     const msg = payload.toString();
-    console.log("[MQTT] MSG", topic, msg);
 
     if (topic === TOPIC_TLE) {
       const tle = parseTLEMessage(msg);
@@ -1052,26 +1064,26 @@
         if (!Number.isNaN(r)) imu.roll = r;
         if (!Number.isNaN(p)) imu.pitch = p;
         if (!Number.isNaN(y)) imu.yaw = y;
+
+        // ✅ first IMU packet sets zero reference so it starts at 0,0,0
+        if (!imuZero) imuZero = { roll: imu.roll, pitch: imu.pitch, yaw: imu.yaw };
       } catch {}
     }
   });
 
   mqttClient.on("reconnect", () => {
-    console.log("[MQTT] RECONNECT");
     mqEl.textContent = "Reconnecting…";
     setStatus("MQTT reconnecting…");
     setLive("RECONNECT");
   });
 
   mqttClient.on("close", () => {
-    console.log("[MQTT] CLOSE");
     mqEl.textContent = "Disconnected";
     setStatus("MQTT disconnected");
     setLive("OFFLINE");
   });
 
   mqttClient.on("offline", () => {
-    console.log("[MQTT] OFFLINE");
     mqEl.textContent = "Offline";
     setStatus("MQTT offline");
     setLive("OFFLINE");
@@ -1084,6 +1096,17 @@
     setLive("OFFLINE");
   });
 
+  /* ===================== OPTIONAL: local test TLE if none arrives ===================== */
+  // Uncomment to test without MQTT:
+  /*
+  setTimeout(() => {
+    setTLE(
+      "ISS (TEST)",
+      "1 25544U 98067A   24001.53472222  .00016717  00000+0  10270-3 0  9002",
+      "2 25544  51.6400  75.0000 0005400  90.0000  10.0000 15.50000000  9999"
+    );
+  }, 800);
+  */
 })();
 </script>
 </body>
