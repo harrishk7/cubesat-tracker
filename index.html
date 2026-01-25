@@ -201,7 +201,6 @@
     <div class="kv"><div class="k">TLE Age</div><div class="v" id="tleAge">—</div></div>
 
     <pre id="tleBox">Waiting for TLE…</pre>
-    <pre id="imuBox">IMU: waiting…</pre>
   </div>
 
   <div id="miniSatView"></div>
@@ -294,7 +293,7 @@
   const el = (id) => document.getElementById(id);
   const stEl = el("st"), utcEl = el("utc"), latEl = el("lat"), lonEl = el("lon"),
         altEl = el("alt"), spdEl = el("spd"), mqEl = el("mq"),
-        tleAgeEl = el("tleAge"), tleBox = el("tleBox"), imuBox = el("imuBox");
+        tleAgeEl = el("tleAge"), tleBox = el("tleBox");
 
   const btnSat = el("btnSat"), btnWorld = el("btnWorld"), btn2d = el("btn2d");
   const row2dOpts = el("row2dOpts");
@@ -782,10 +781,7 @@
       tleAgeEl.textContent = Math.floor((Date.now() - tleReceivedAt.getTime())/1000) + " s";
     }
 
-    imuBox.textContent =
-      `IMU (raw):  r=${imu.roll.toFixed(2)}  p=${imu.pitch.toFixed(2)}  y=${imu.yaw.toFixed(2)}\n` +
-      `IMU (zero): ${imuZero ? `r=${imuZero.roll.toFixed(2)} p=${imuZero.pitch.toFixed(2)} y=${imuZero.yaw.toFixed(2)}` : "waiting…"}`;
-
+    
     if (viewer.scene.mode === Cesium.SceneMode.SCENE2D && follow2D) {
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, FOLLOW2D_HEIGHT_M)
