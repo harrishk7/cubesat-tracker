@@ -16,6 +16,21 @@
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 
   <style>
+    :root{
+      --bg0: rgba(0,0,0,0.55);
+      --bg1: rgba(6,18,28,0.78);
+      --panel: rgba(3,16,26,0.72);
+      --panel2: rgba(2,12,20,0.76);
+      --line: rgba(0,255,255,0.22);
+      --line2: rgba(255,255,255,0.10);
+      --cyan: rgba(0,255,255,0.92);
+      --cyan2: rgba(0,255,255,0.55);
+      --txt: rgba(240,255,255,0.92);
+      --muted: rgba(180,220,220,0.58);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --ui: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+
     html, body, #cesiumContainer {
       width:100%; height:100%;
       margin:0; padding:0;
@@ -23,34 +38,89 @@
       background:#000;
     }
 
-    /* HUD */
+    /* =========================
+       HUD (Mission Control style)
+       ========================= */
     #hud{
       position:absolute;
-      left:12px; top:12px;
+      left:14px; top:14px;
       z-index:30;
-      width: 380px;
-      max-height: calc(100vh - 24px);
+      width: 420px;
+      max-height: calc(100vh - 28px);
       overflow:auto;
-      padding:12px;
-      border-radius:14px;
-      background: rgba(0,0,0,0.55);
-      border:1px solid rgba(255,255,255,0.14);
-      color:#fff;
-      font:12px/1.45 system-ui, sans-serif;
-      backdrop-filter: blur(8px);
+      padding:14px 14px 12px;
+      border-radius:16px;
+
+      background: linear-gradient(180deg, rgba(5,24,36,0.82), rgba(2,14,22,0.78));
+      border: 1px solid rgba(0,255,255,0.28);
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,0.06) inset,
+        0 0 30px rgba(0,255,255,0.10),
+        0 18px 60px rgba(0,0,0,0.55);
+      backdrop-filter: blur(10px);
+
+      color: var(--txt);
+      font: 12px/1.45 var(--ui);
     }
 
+    /* header row */
+    #hudHeader{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:12px;
+    }
+
+    #hudTitleWrap{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      min-width: 0;
+    }
+
+    .hexDot{
+      width:10px; height:10px;
+      background: var(--cyan);
+      box-shadow: 0 0 16px rgba(0,255,255,0.50);
+      clip-path: polygon(25% 4%, 75% 4%, 96% 50%, 75% 96%, 25% 96%, 4% 50%);
+      flex: 0 0 auto;
+    }
+
+    #hudTitle{
+      margin:0;
+      font: 700 14px/1.1 var(--mono);
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(0,255,255,0.80);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #hudHeaderRight{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex: 0 0 auto;
+    }
+
+    /* LIVE pill */
     #livePill{
       display:inline-flex;
       align-items:center;
-      gap:8px;
-      padding:6px 10px;
+      gap:10px;
+      padding:6px 12px;
       border-radius:999px;
-      border:1px solid rgba(255,255,255,0.14);
-      background: rgba(255,255,255,0.06);
-      font: 11px system-ui, sans-serif;
+      border:1px solid rgba(0,255,255,0.30);
+      background: rgba(0,0,0,0.18);
+      box-shadow: 0 0 0 1px rgba(0,255,255,0.05) inset;
+      font: 700 11px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
       user-select:none;
       white-space:nowrap;
+      color: rgba(230,255,255,0.88);
     }
     #liveDot{
       width:8px; height:8px;
@@ -58,56 +128,160 @@
       background: rgba(180,180,180,0.95);
       box-shadow: 0 0 14px rgba(180,180,180,0.35);
     }
-    #liveTxt{ letter-spacing: 0.4px; opacity: 0.92; }
+    #liveTxt{ opacity:0.94; }
 
+    /* little "bars" icon */
+    #hudBars{
+      width:34px; height:26px;
+      border-radius:8px;
+      border:1px solid rgba(0,255,255,0.28);
+      background: rgba(0,0,0,0.14);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow: 0 0 0 1px rgba(0,255,255,0.05) inset;
+    }
+    #hudBars i{
+      display:block;
+      width:18px; height:12px;
+      position:relative;
+      opacity:0.95;
+    }
+    #hudBars i::before{
+      content:"";
+      position:absolute; inset:0;
+      background:
+        linear-gradient(to right,
+          rgba(0,255,255,0.85) 0 3px, transparent 3px 6px,
+          rgba(0,255,255,0.70) 6px 9px, transparent 9px 12px,
+          rgba(0,255,255,0.55) 12px 15px, transparent 15px 18px);
+      filter: drop-shadow(0 0 6px rgba(0,255,255,0.18));
+    }
+
+    /* Buttons rows */
+    .btnRow{
+      display:flex;
+      gap:10px;
+      margin-bottom:12px;
+    }
+
+    .mcBtn{
+      flex:1;
+      cursor:pointer;
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid rgba(0,255,255,0.22);
+      background: rgba(0,0,0,0.14);
+      color: rgba(0,255,255,0.72);
+      font: 800 12px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,0.03) inset,
+        0 10px 20px rgba(0,0,0,0.18);
+      transition: transform 80ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease, background 120ms ease;
+      user-select:none;
+    }
+    .mcBtn:hover{
+      transform: translateY(-1px);
+      border-color: rgba(0,255,255,0.34);
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,0.06) inset,
+        0 0 22px rgba(0,255,255,0.10);
+      color: rgba(0,255,255,0.85);
+    }
+    .mcBtn.active{
+      background: rgba(0,255,255,0.08);
+      border-color: rgba(0,255,255,0.55);
+      color: rgba(0,255,255,0.95);
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,0.12) inset,
+        0 0 26px rgba(0,255,255,0.14);
+    }
+
+    /* Data cards */
+    .card{
+      margin-top: 10px;
+      padding: 12px 12px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(0,0,0,0.18), rgba(0,0,0,0.10));
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 0 0 1px rgba(0,255,255,0.05) inset;
+      position: relative;
+    }
+    .card::before{
+      content:"";
+      position:absolute;
+      left:0; top:10px; bottom:10px;
+      width:3px;
+      border-radius: 3px;
+      background: rgba(0,255,255,0.35);
+      box-shadow: 0 0 14px rgba(0,255,255,0.12);
+    }
+    .rows{
+      display:flex;
+      flex-direction:column;
+      gap:0;
+    }
+    .rowKV{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap: 14px;
+      padding: 9px 0;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .rowKV:first-child{ border-top: none; padding-top: 2px; }
+    .k{
+      font: 800 11px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(0,255,255,0.55);
+      padding-left: 8px;
+    }
+    .v{
+      font: 700 12px/1.1 var(--mono);
+      letter-spacing: 0.05em;
+      color: rgba(0,255,255,0.88);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      padding-right: 2px;
+    }
+    .v.dim{ color: rgba(230,255,255,0.82); letter-spacing: 0.03em; }
+
+    /* TLE box */
+    #tleBox{
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.16);
+      border: 1px solid rgba(0,255,255,0.12);
+      box-shadow: 0 0 0 1px rgba(0,255,255,0.03) inset;
+      color: rgba(225,255,255,0.85);
+      font: 12px/1.35 var(--mono);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Mini view */
     #miniSatView{
       position:absolute;
-      left:12px;
-      top: 320px;
-      width:380px;
-      height:230px;
-      border-radius:14px;
+      left:14px;
+      top: 340px;
+      width:420px;
+      height:240px;
+      border-radius:16px;
       overflow:hidden;
-      border:1px solid rgba(0,255,255,0.35);
+      border:1px solid rgba(0,255,255,0.28);
       background:#000;
       z-index:20;
-      box-shadow: 0 0 24px rgba(0,255,255,0.18);
+      box-shadow: 0 0 30px rgba(0,255,255,0.10);
       display:none;
     }
 
-    #hud h3 { margin:0; font-size:13px; }
-
-    .row { display:flex; gap:8px; margin-bottom:10px; }
-    button{
-      flex:1; cursor:pointer;
-      padding:8px 10px;
-      border-radius:12px;
-      border:1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.06);
-      color:#fff;
-      font:12px system-ui, sans-serif;
-    }
-    button.active{
-      border-color: rgba(0,255,255,0.6);
-      box-shadow: 0 0 0 1px rgba(0,255,255,0.25) inset;
-    }
-
-    .kv { display:flex; justify-content:space-between; gap:12px; margin:4px 0; }
-    .k { opacity:0.78; }
-    .v { font-variant-numeric: tabular-nums; }
-
-    pre{
-      margin:10px 0 0;
-      padding:8px 10px;
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.10);
-      border-radius: 12px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 11px;
-      line-height: 1.35;
-    }
-
+    /* =========================
+       PASS PLANNER MODAL (match screenshot)
+       ========================= */
     #modal{
       position:absolute;
       inset:0;
@@ -116,40 +290,103 @@
       justify-content:center;
       z-index:100;
       background: rgba(0,0,0,0.55);
-      backdrop-filter: blur(6px);
+      backdrop-filter: blur(7px);
     }
     #modalCard{
-      width:min(760px, calc(100vw - 24px));
-      border-radius:16px;
-      border:1px solid rgba(255,255,255,0.18);
-      background: rgba(0,0,0,0.78);
+      width:min(760px, calc(100vw - 28px));
+      border-radius:18px;
+      border:1px solid rgba(0,255,255,0.28);
+      background: linear-gradient(180deg, rgba(5,24,36,0.86), rgba(2,14,22,0.84));
+      box-shadow:
+        0 0 0 1px rgba(0,255,255,0.06) inset,
+        0 0 40px rgba(0,255,255,0.10),
+        0 18px 70px rgba(0,0,0,0.65);
       color:#fff;
-      padding:14px 14px 12px;
-      box-shadow: 0 0 40px rgba(0,0,0,0.6);
-      font: 12px/1.45 system-ui, sans-serif;
+      overflow:hidden;
+      font: 12px/1.45 var(--ui);
     }
     #modalTop{
       display:flex;
-      justify-content:space-between;
-      gap:10px;
       align-items:center;
-      margin-bottom:8px;
+      justify-content:space-between;
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid rgba(0,255,255,0.16);
+    }
+    #modalTitleWrap{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      min-width: 0;
     }
     #modalTitle{
-      font-size:13px;
       margin:0;
-      opacity:0.95;
+      font: 800 14px/1.1 var(--mono);
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(0,255,255,0.78);
+      white-space: nowrap;
+      overflow:hidden;
+      text-overflow: ellipsis;
     }
     #modalClose{
       cursor:pointer;
-      padding:6px 10px;
+      width:44px;
+      height:34px;
       border-radius:10px;
-      border:1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.06);
-      color:#fff;
-      font: 12px system-ui, sans-serif;
+      border:1px solid rgba(0,255,255,0.22);
+      background: rgba(0,0,0,0.14);
+      color: rgba(230,255,255,0.88);
+      font: 900 16px/1 var(--mono);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow: 0 0 0 1px rgba(0,255,255,0.05) inset;
+      user-select:none;
+    }
+    #modalClose:hover{
+      border-color: rgba(0,255,255,0.36);
+      box-shadow: 0 0 22px rgba(0,255,255,0.12);
     }
 
+    #modalBody{
+      padding: 14px;
+    }
+    .passBlock{
+      padding: 10px 0 0;
+    }
+    .passSep{
+      height:1px;
+      background: rgba(0,255,255,0.14);
+      margin: 14px 0;
+    }
+    .passRow{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:14px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      background: rgba(0,0,0,0.12);
+      border: 1px solid rgba(255,255,255,0.04);
+      margin-bottom: 8px;
+      box-shadow: 0 0 0 1px rgba(0,255,255,0.03) inset;
+    }
+    .passK{
+      font: 800 11px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(0,255,255,0.55);
+    }
+    .passV{
+      font: 700 12px/1.2 var(--mono);
+      letter-spacing: 0.05em;
+      color: rgba(0,255,255,0.88);
+      font-variant-numeric: tabular-nums;
+      text-align:right;
+      white-space: nowrap;
+    }
+
+    /* Hide Cesium footer */
     .cesium-viewer-bottom { display:none !important; }
   </style>
 </head>
@@ -158,49 +395,72 @@
   <div id="cesiumContainer"></div>
 
   <div id="modal">
-    <div id="modalCard">
+    <div id="modalCard" role="dialog" aria-modal="true">
       <div id="modalTop">
-        <h4 id="modalTitle">Ground Station • Pass Planner</h4>
-        <button id="modalClose">Close</button>
+        <div id="modalTitleWrap">
+          <span class="hexDot"></span>
+          <h4 id="modalTitle">GROUND STATION • PASS PLANNER</h4>
+        </div>
+        <button id="modalClose" aria-label="Close">×</button>
       </div>
-      <pre id="modalBody">Loading…</pre>
+      <div id="modalBody">Loading…</div>
     </div>
   </div>
 
   <div id="hud">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;">
-      <h3>CubeSat Tracker</h3>
-      <div id="livePill" title="Streaming status">
-        <span id="liveDot"></span>
-        <span id="liveTxt">BOOT</span>
+    <div id="hudHeader">
+      <div id="hudTitleWrap">
+        <span class="hexDot"></span>
+        <h3 id="hudTitle">MISSION CONTROL</h3>
+      </div>
+
+      <div id="hudHeaderRight">
+        <div id="livePill" title="Streaming status">
+          <span id="liveDot"></span>
+          <span id="liveTxt">BOOT</span>
+        </div>
+        <div id="hudBars" title="Status">
+          <i></i>
+        </div>
       </div>
     </div>
 
-    <div class="row">
-      <button id="btnSat" class="active">Sat POV</button>
-      <button id="btnWorld">World POV</button>
-      <button id="btn2d">2D POV</button>
+    <div class="btnRow">
+      <button id="btnSat" class="mcBtn active">SAT POV</button>
+      <button id="btnWorld" class="mcBtn">WORLD POV</button>
+      <button id="btn2d" class="mcBtn">2D POV</button>
     </div>
 
-    <div class="row" id="row2dOpts" style="display:none;">
-      <button id="btn2dFollow">2D: Trace Sat</button>
-      <button id="btn2dZoom" class="active">2D: Zoom Out</button>
+    <div class="btnRow" id="row2dOpts" style="display:none;">
+      <button id="btn2dFollow" class="mcBtn">TRACE SAT</button>
+      <button id="btn2dZoom" class="mcBtn active">ZOOM OUT</button>
     </div>
 
-    <div class="kv"><div class="k">Status</div><div class="v" id="st">Booting…</div></div>
-    <div class="kv"><div class="k">UTC</div><div class="v" id="utc">—</div></div>
+    <div class="card">
+      <div class="rows">
+        <div class="rowKV"><div class="k">STATUS</div><div class="v dim" id="st">Booting…</div></div>
+        <div class="rowKV"><div class="k">UTC</div><div class="v" id="utc">—</div></div>
+        <div class="rowKV"><div class="k">MET</div><div class="v" id="met">—</div></div>
+      </div>
+    </div>
 
-    <div style="height:8px"></div>
-    <div class="kv"><div class="k">Lat</div><div class="v" id="lat">—</div></div>
-    <div class="kv"><div class="k">Lon</div><div class="v" id="lon">—</div></div>
-    <div class="kv"><div class="k">Alt</div><div class="v" id="alt">—</div></div>
-    <div class="kv"><div class="k">Speed</div><div class="v" id="spd">—</div></div>
+    <div class="card" style="margin-top:12px;">
+      <div class="rows">
+        <div class="rowKV"><div class="k">LATITUDE</div><div class="v" id="lat">—</div></div>
+        <div class="rowKV"><div class="k">LONGITUDE</div><div class="v" id="lon">—</div></div>
+        <div class="rowKV"><div class="k">ALTITUDE</div><div class="v" id="alt">—</div></div>
+        <div class="rowKV"><div class="k">VELOCITY</div><div class="v" id="spd">—</div></div>
+      </div>
+    </div>
 
-    <div style="height:8px"></div>
-    <div class="kv"><div class="k">MQTT</div><div class="v" id="mq">—</div></div>
-    <div class="kv"><div class="k">TLE Age</div><div class="v" id="tleAge">—</div></div>
+    <div class="card" style="margin-top:12px;">
+      <div class="rows">
+        <div class="rowKV"><div class="k">DATA ING.</div><div class="v dim" id="mq">—</div></div>
+        <div class="rowKV"><div class="k">TLE AGE</div><div class="v" id="tleAge">—</div></div>
+      </div>
+    </div>
 
-    <pre id="tleBox">Waiting for TLE…</pre>
+    <div id="tleBox">Waiting for TLE…</div>
   </div>
 
   <div id="miniSatView"></div>
@@ -214,21 +474,12 @@
 
   /* ===================== PERF (butter smooth) ===================== */
   const PERF = {
-    // Update cached orbit state at fixed Hz (NOT every frame)
     STATE_HZ: 25,
-
-    // Update coverage ring slower
     COVER_HZ: 8,
-
-    // Orbit samples: fewer points + smooth interpolation
     SAMPLE_STEP_SEC: 5,
-
-    // Terrain is expensive. Keep OFF for smooth.
     ENABLE_WORLD_TERRAIN: false,
-    ENABLE_LIGHTING: true,      // looks nice; if lag → set false
+    ENABLE_LIGHTING: true,
     DEPTH_TEST_TERRAIN: false,
-
-    // Globe tuning
     MAX_SSE: 2.0,
     TILE_CACHE: 600,
     FXAA: true
@@ -270,13 +521,13 @@
   // IMU
   const imu = { roll: 0, pitch: 0, yaw: 0 };
   const IMU_SIGN = { roll: +1, pitch: +1, yaw: +1 };
-
-  // ✅ auto-zero so start = 0,0,0
   let imuZero = null;
 
   // 2D behavior
   let follow2D = false;
   const FOLLOW2D_HEIGHT_M = 1.8e6;
+
+  const missionStartMs = performance.now();
 
   function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
   function normLon(lon){
@@ -291,7 +542,8 @@
 
   /* ===================== DOM ===================== */
   const el = (id) => document.getElementById(id);
-  const stEl = el("st"), utcEl = el("utc"), latEl = el("lat"), lonEl = el("lon"),
+  const stEl = el("st"), utcEl = el("utc"), metEl = el("met"),
+        latEl = el("lat"), lonEl = el("lon"),
         altEl = el("alt"), spdEl = el("spd"), mqEl = el("mq"),
         tleAgeEl = el("tleAge"), tleBox = el("tleBox");
 
@@ -312,6 +564,14 @@
 
   function setStatus(s){ stEl.textContent = s; }
   function nowUTCString(){ return new Date().toISOString().replace("T"," ").replace("Z"," UTC"); }
+
+  function formatMET(ms){
+    const s = Math.max(0, Math.floor(ms/1000));
+    const hh = String(Math.floor(s/3600)).padStart(2,"0");
+    const mm = String(Math.floor((s%3600)/60)).padStart(2,"0");
+    const ss = String(s%60).padStart(2,"0");
+    return `${hh}:${mm}:${ss}`;
+  }
 
   function setLive(mode){
     liveTxt.textContent = mode;
@@ -350,8 +610,8 @@
   }
   window.addEventListener("resize", layoutMini);
 
-  function openModal(text){
-    modalBody.textContent = text;
+  function openModalHtml(html){
+    modalBody.innerHTML = html;
     modal.style.display = "flex";
   }
   function closeModal(){ modal.style.display = "none"; }
@@ -638,7 +898,7 @@
       maximumScale: 80000,
       shadows: Cesium.ShadowMode.DISABLED
     },
-    point: { // fallback if GLB fails
+    point: {
       pixelSize: 8,
       color: Cesium.Color.CYAN,
       outlineColor: Cesium.Color.BLACK,
@@ -762,6 +1022,7 @@
   /* ===================== HUD UPDATE ===================== */
   function updateHud(){
     utcEl.textContent = nowUTCString();
+    metEl.textContent = formatMET(performance.now() - missionStartMs);
 
     updateStateCache();
     updateCoverageCache();
@@ -772,16 +1033,15 @@
       return;
     }
 
-    latEl.textContent = state.lat.toFixed(5) + "°";
-    lonEl.textContent = normLon(state.lon).toFixed(5) + "°";
-    altEl.textContent = state.altKm.toFixed(1) + " km";
-    spdEl.textContent = state.speedKmS.toFixed(3) + " km/s";
+    latEl.textContent = state.lat.toFixed(4) + "°";
+    lonEl.textContent = normLon(state.lon).toFixed(4) + "°";
+    altEl.textContent = state.altKm.toFixed(2) + " km";
+    spdEl.textContent = (state.speedKmS * 1000).toFixed(2) + " m/s";
 
     if (tleReceivedAt) {
       tleAgeEl.textContent = Math.floor((Date.now() - tleReceivedAt.getTime())/1000) + " s";
     }
 
-    
     if (viewer.scene.mode === Cesium.SceneMode.SCENE2D && follow2D) {
       viewer.camera.setView({
         destination: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, FOLLOW2D_HEIGHT_M)
@@ -804,7 +1064,6 @@
     setStatus("Sat POV ✅");
   }
 
-  // ✅ World POV = track satellite but with far camera offset (feels like Earth moves under it)
   function setWorldPOV(){
     setActive(btnWorld);
     row2dOpts.style.display = "none";
@@ -861,7 +1120,7 @@
   setSatPOV();
   layoutMini();
 
-  /* ===================== PASS PLANNER (kept minimal) ===================== */
+  /* ===================== PASS PLANNER ===================== */
   function fmtTime(d){ return d.toISOString().replace("T"," ").replace("Z"," UTC"); }
 
   function isOverIndia(lat, lon){
@@ -940,45 +1199,63 @@
     return null;
   }
 
+  function passRow(label, value){
+    const safe = (s)=>String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
+    return `
+      <div class="passRow">
+        <div class="passK">${safe(label)}</div>
+        <div class="passV">${safe(value)}</div>
+      </div>`;
+  }
+
   async function showPassPlanner(){
     if (!satrec) {
-      openModal("No TLE loaded yet.\n\nPublish a retained TLE to:\n" + TOPIC_TLE);
+      openModalHtml(`
+        <div class="passBlock">
+          ${passRow("NO T_attachment", "No TLE loaded yet")}
+          ${passRow("PUBLISH", TOPIC_TLE)}
+        </div>
+      `);
       return;
     }
 
-    openModal("Computing next passes…");
+    openModalHtml(`<div class="passBlock">${passRow("STATUS", "Computing next passes…")}</div>`);
 
     const now = new Date();
     const pass = findNextGroundPass(now, 24, 10, 10);
     const india = findNextIndiaOverflight(now, 24, 20);
 
-    let text = "";
-    text += `GROUND STATION: ${GROUND_STATION.name}\n`;
-    text += `Location: ${GROUND_STATION.lat.toFixed(5)}, ${GROUND_STATION.lon.toFixed(5)}\n`;
-    text += `Min elevation: 10°\n\n`;
-
-    if (pass) {
+    let html = `<div class="passBlock">`;
+    html += passRow("NEXT GS PASS (AOS)", pass ? pass.aos.toISOString() : "—");
+    html += passRow("LOS", pass ? pass.los.toISOString() : "—");
+    if (pass){
       const durSec = Math.max(0, Math.floor((pass.los - pass.aos)/1000));
-      text += `NEXT GS PASS (AOS → LOS)\n`;
-      text += `AOS: ${fmtTime(pass.aos)}\n`;
-      text += `LOS: ${fmtTime(pass.los)}\n`;
-      text += `Duration: ${durSec} s\n`;
-      text += `Max Elev: ${pass.maxEl.toFixed(1)}° @ ${fmtTime(pass.tMax)}\n\n`;
+      const mm = Math.floor(durSec/60), ss = durSec%60;
+      html += passRow("DURATION", `${mm}m ${ss}s`);
+      html += passRow("MAX ELEVATION", `${pass.maxEl.toFixed(1)}°`);
+      html += passRow("MAX ELEV TIME", pass.tMax.toISOString());
     } else {
-      text += `NEXT GS PASS\nNo pass found within 24h.\n\n`;
+      html += passRow("DURATION", "—");
+      html += passRow("MAX ELEVATION", "—");
+      html += passRow("MAX ELEV TIME", "—");
     }
+    html += `</div>`;
 
-    text += `NEXT OVER-INDIA WINDOW (bbox)\n`;
-    if (india) {
+    html += `<div class="passSep"></div>`;
+
+    html += `<div class="passBlock">`;
+    html += passRow("NEXT INDIA PASS (AOS)", india ? india.enter.toISOString() : "—");
+    html += passRow("LOS", india ? india.exit.toISOString() : "—");
+    if (india){
       const durSec = Math.max(0, Math.floor((india.exit - india.enter)/1000));
-      text += `Enter: ${fmtTime(india.enter)}\n`;
-      text += `Exit : ${fmtTime(india.exit)}\n`;
-      text += `Duration: ${durSec} s\n`;
+      const mm = Math.floor(durSec/60), ss = durSec%60;
+      html += passRow("DURATION", `${mm}m ${ss}s`);
     } else {
-      text += `No over-India crossing found within 24h.\n`;
+      html += passRow("DURATION", "—");
     }
+    html += `</div>`;
 
-    openModal(text);
+    openModalHtml(html);
   }
 
   viewer.homeButton.viewModel.command.beforeExecute.addEventListener((e) => {
@@ -997,14 +1274,9 @@
     satrec = satellite.twoline2satrec(l1, l2);
 
     tleBox.textContent = `${satName}\n${l1}\n${l2}`;
-    setStatus("TLE loaded ✅");
-
-    // reset IMU zero so it starts as 0,0,0 after new TLE (optional)
-    // imuZero = null;
+    setStatus("TLE Loaded");
 
     seedSamples(new Date());
-
-    // jump to current
     updateStateCache();
 
     if (btnWorld.classList.contains("active")) setWorldPOV();
@@ -1013,7 +1285,7 @@
   }
 
   /* ===================== MQTT ===================== */
-  setStatus("Connecting MQTT…");
+  setStatus("Connecting Data Ing…");
   mqEl.textContent = "Connecting…";
   setLive("RECONNECT");
 
@@ -1032,8 +1304,8 @@
   });
 
   mqttClient.on("connect", () => {
-    mqEl.textContent = "Connected ✅";
-    setStatus("MQTT connected ✅");
+    mqEl.textContent = "LIVE";
+    setStatus("TLE " + (satrec ? "Loaded" : "Waiting"));
     setLive("LIVE");
 
     mqttClient.subscribe(TOPIC_TLE, { qos: 1 }, (err) => { if (err) setStatus("Subscribe TLE error ❌"); });
@@ -1061,48 +1333,35 @@
         if (!Number.isNaN(p)) imu.pitch = p;
         if (!Number.isNaN(y)) imu.yaw = y;
 
-        // ✅ first IMU packet sets zero reference so it starts at 0,0,0
         if (!imuZero) imuZero = { roll: imu.roll, pitch: imu.pitch, yaw: imu.yaw };
       } catch {}
     }
   });
 
   mqttClient.on("reconnect", () => {
-    mqEl.textContent = "Reconnecting…";
-    setStatus("MQTT reconnecting…");
+    mqEl.textContent = "RECONNECT";
+    setStatus("Data Ing reconnecting…");
     setLive("RECONNECT");
   });
 
   mqttClient.on("close", () => {
-    mqEl.textContent = "Disconnected";
-    setStatus("MQTT disconnected");
+    mqEl.textContent = "OFFLINE";
+    setStatus("Data Ing disconnected");
     setLive("OFFLINE");
   });
 
   mqttClient.on("offline", () => {
-    mqEl.textContent = "Offline";
-    setStatus("MQTT offline");
+    mqEl.textContent = "OFFLINE";
+    setStatus("Data Ing offline");
     setLive("OFFLINE");
   });
 
   mqttClient.on("error", (e) => {
     console.log("[MQTT] ERROR", e);
-    mqEl.textContent = "Error";
-    setStatus("MQTT error ❌");
+    mqEl.textContent = "ERROR";
+    setStatus("Data Ing error ❌");
     setLive("OFFLINE");
   });
-
-  /* ===================== OPTIONAL: local test TLE if none arrives ===================== */
-  // Uncomment to test without MQTT:
-  /*
-  setTimeout(() => {
-    setTLE(
-      "ISS (TEST)",
-      "1 25544U 98067A   24001.53472222  .00016717  00000+0  10270-3 0  9002",
-      "2 25544  51.6400  75.0000 0005400  90.0000  10.0000 15.50000000  9999"
-    );
-  }, 800);
-  */
 })();
 </script>
 </body>
